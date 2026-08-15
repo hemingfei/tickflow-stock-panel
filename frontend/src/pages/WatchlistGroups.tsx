@@ -411,6 +411,7 @@ export function WatchlistGroups() {
   const queryClient = useQueryClient()
 
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [showGroupModal, setShowGroupModal] = useState(false)  // 明确控制是否显示板块详情 Modal
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -532,6 +533,15 @@ export function WatchlistGroups() {
     onError: (e: any) => toast(e.message || '置顶失败', 'error'),
   })
 
+  const moveGroupToTopMutation = useMutation({
+    mutationFn: (groupIds: string[]) =>
+      api.watchlistGroups.reorder(groupIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+    },
+    onError: (e: any) => toast(e.message || '板块置顶失败', 'error'),
+  })
+
   // 加载列配置
   useEffect(() => {
     if (columnsLoaded.current) return
@@ -588,10 +598,11 @@ export function WatchlistGroups() {
   })
 
   useEffect(() => {
-    if (groupsQuery.data?.groups?.length && !selectedGroupId) {
+    // 只有在侧边栏视图时才自动设置第一个板块为选中
+    if (groupsQuery.data?.groups?.length && !selectedGroupId && sidebarOrCardsView === 'sidebar') {
       setSelectedGroupId(groupsQuery.data.groups[0].group_id)
     }
-  }, [groupsQuery.data])
+  }, [groupsQuery.data, sidebarOrCardsView])
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -602,6 +613,14 @@ export function WatchlistGroups() {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  // 当视图模式变化时，清理相关状态
+  useEffect(() => {
+    if (sidebarOrCardsView === 'cards') {
+      // 切换到卡片视图时，隐藏 Modal
+      setShowGroupModal(false)
+    }
+  }, [sidebarOrCardsView])
 
   // 前端计算板块平均涨跌幅
   const calculateGroupAvgChange = useCallback((group: any, allGroupItems?: Record<string, any[]>) => {
@@ -856,30 +875,55 @@ export function WatchlistGroups() {
           </div>
         </div>
         <div className="space-y-2">
-          {groupsQuery.data?.groups?.map((group) => {
+          {groupsQuery.data?.groups?.map((group, index) => {
             const rows = allGroupItems?.[group.group_id]
             const avgChange = rows ? calculateGroupAvgChange(group, { [group.group_id]: rows }) : { simple: null, weighted: null }
             const displayChange = avgPctMode === 'simple' ? avgChange.simple : avgChange.weighted
+            const isFirst = index === 0
+
+            const handleMoveToTop = (e: React.MouseEvent) => {
+              e.stopPropagation()
+              const currentGroups = groupsQuery.data?.groups?.map(g => g.group_id) || []
+              const newOrder = [group.group_id, ...currentGroups.filter(id => id !== group.group_id)]
+              moveGroupToTopMutation.mutate(newOrder)
+            }
 
             return (
-              <button
+              <div
                 key={group.group_id}
-                onClick={() => setSelectedGroupId(group.group_id)}
                 className={cn(
-                  'w-full text-left p-3 rounded-btn transition-colors',
-                  selectedGroupId === group.group_id ? 'bg-elevated text-foreground' : 'hover:bg-elevated/50'
+                  'flex items-center gap-2 p-2 rounded-btn transition-colors',
+                  selectedGroupId === group.group_id ? 'bg-elevated text-foreground' : 'hover:bg-elevated/30'
                 )}
               >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium truncate">{group.name}</span>
-                  <div className="flex items-center gap-2">
-                    {displayChange != null && (
-                      <span className={cn('text-xs font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
-                    )}
-                    <span className="text-xs opacity-70">{group.item_count} 只</span>
+                <button
+                  onClick={handleMoveToTop}
+                  disabled={moveGroupToTopMutation.isPending || isFirst}
+                  className={cn(
+                    'p-1.5 rounded transition-colors',
+                    isFirst
+                      ? 'opacity-30 cursor-default'
+                      : 'text-muted hover:text-accent hover:bg-accent/10'
+                  )}
+                  title={isFirst ? '已在顶部' : '移到顶部'}
+                >
+                  <ChevronsUp className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setSelectedGroupId(group.group_id)}
+                  className="flex-1 text-left min-w-0"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium truncate">{group.name}</span>
+                    <div className="flex items-center gap-2">
+                      {displayChange != null && (
+                        <span className={cn('text-xs font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
+                      )}
+                      <span className="text-xs opacity-70">{group.item_count} 只</span>
+                    </div>
                   </div>
-                </div>
-              </button>
+                </button>
+              </div>
             )
           })}
         </div>
@@ -981,26 +1025,35 @@ export function WatchlistGroups() {
         </button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {groupsQuery.data?.groups?.map((group) => (
-            <GroupCard
-              key={group.group_id}
-              group={group}
-              onSelect={setSelectedGroupId}
-              avgPctMode={avgPctMode}
-              items={allGroupItems?.[group.group_id]}
-            />
-          ))}
+        {groupsQuery.data?.groups?.map((group) => (
+          <GroupCard
+            key={group.group_id}
+            group={group}
+            onSelect={(id) => { 
+              setSelectedGroupId(id); 
+              setShowGroupModal(true); 
+            }}
+            avgPctMode={avgPctMode}
+            items={allGroupItems?.[group.group_id]}
+          />
+        ))}
       </div>
-      {selectedGroupId && (
+      {showGroupModal && selectedGroupId && (
         <Modal
-          onClose={() => setSelectedGroupId(null)}
+          onClose={() => {
+            setShowGroupModal(false);
+            setSelectedGroupId(null);
+          }}
           panelClassName="w-[90vw] max-w-5xl max-h-[80vh] flex flex-col bg-surface border border-border rounded-lg shadow-xl"
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
             <h2 className="text-lg font-semibold">{groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)?.name}</h2>
             <button
               type="button"
-              onClick={() => setSelectedGroupId(null)}
+              onClick={() => {
+                setShowGroupModal(false);
+                setSelectedGroupId(null);
+              }}
               className="h-8 w-8 inline-flex items-center justify-center rounded-btn text-secondary hover:bg-elevated"
             >
               <X className="h-4 w-4" />
