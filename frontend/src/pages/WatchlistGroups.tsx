@@ -501,12 +501,13 @@ export function WatchlistGroups() {
       api.watchlistGroups.addItem(groupId, symbol),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
         queryClient.invalidateQueries({ queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId) })
       }
-      toast('股票添加成功')
+      toast("股票添加成功")
     },
-    onError: (e: any) => toast(e.message || '添加失败', 'error'),
+    onError: (e: any) => toast(e.message || "添加失败", "error"),
   })
 
   const removeItemMutation = useMutation({
@@ -514,12 +515,13 @@ export function WatchlistGroups() {
       api.watchlistGroups.removeItem(groupId, symbol),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
         queryClient.invalidateQueries({ queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId) })
       }
-      toast('股票移除成功')
+      toast("股票移除成功")
     },
-    onError: (e: any) => toast(e.message || '移除失败', 'error'),
+    onError: (e: any) => toast(e.message || "移除失败", "error"),
   })
 
   const moveItemToTopMutation = useMutation({
@@ -527,11 +529,12 @@ export function WatchlistGroups() {
       api.watchlistGroups.reorderItems(groupId, symbols),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
         queryClient.invalidateQueries({ queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId) })
       }
     },
-    onError: (e: any) => toast(e.message || '置顶失败', 'error'),
+    onError: (e: any) => toast(e.message || "置顶失败", "error"),
   })
 
   const moveGroupToTopMutation = useMutation({
