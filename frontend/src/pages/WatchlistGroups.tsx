@@ -1,17 +1,20 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Plus, List, Grid, Trash2, Edit2, X, Search, Check, Settings } from 'lucide-react'
+import { Plus, List, Grid, Trash2, Edit2, X, Search, Check, Settings, LayoutGrid, RefreshCw, Settings2, Minus, ChevronsUp } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from '@/components/Toast'
 import { Modal } from '@/components/Modal'
 import { EmptyState } from '@/components/EmptyState'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { renderBuiltinDataCell, boardTag } from '@/components/stock-table/primitives'
-import { fmtPct } from '@/lib/format'
+import { fmtPrice, fmtPct, priceColorClass } from '@/lib/format'
 import { QK } from '@/lib/queryKeys'
-import { BUILTIN_COLUMNS, type ColumnConfig } from '@/lib/watchlist-columns'
+import { BUILTIN_COLUMNS, type ColumnConfig, loadColumnConfig, saveColumnConfig } from '@/lib/watchlist-groups-columns'
+import { ColumnCustomizer } from '@/components/ColumnCustomizer'
+import { storage } from '@/lib/storage'
 import { api, type WatchlistGroup } from '@/lib/api'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
+import { getSignals, signalCls } from '@/lib/stock-table'
 import { cn } from '@/lib/cn'
 
 function StockSearchBox({
@@ -148,6 +151,166 @@ function StockSearchBox({
   )
 }
 
+// 换手率分档色
+function turnoverColor(rate: number | null | undefined): string {
+  if (rate == null || Number.isNaN(rate)) return 'text-[#888]'
+  if (rate < 5) return 'text-[#888]'
+  if (rate < 10) return 'text-[#d4a800]'
+  if (rate < 20) return 'text-[#f97316]'
+  if (rate < 35) return 'text-[#d94a3d]'
+  return 'text-[#b84a8a]'
+}
+
+// 卡片列数计算
+function cardColumnCount(viewportWidth: number): number {
+  if (viewportWidth >= 1536) return 6
+  if (viewportWidth >= 1280) return 5
+  if (viewportWidth >= 768) return 4
+  if (viewportWidth >= 640) return 3
+  return 2
+}
+
+function useCardColumnCount(): number {
+  const [count, setCount] = useState(() => cardColumnCount(window.innerWidth))
+
+  useEffect(() => {
+    const update = () => setCount(cardColumnCount(window.innerWidth))
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  return count
+}
+
+// 自选板块专用的 StockCard 组件
+const StockCard = React.memo(function StockCard({
+  r,
+  onPreview,
+  onConfirmRemove,
+  onCancelRemove,
+  onRequestRemove,
+  isConfirming,
+}: {
+  r: any
+  onPreview: (symbol: string, name: string) => void
+  onConfirmRemove: (symbol: string) => void
+  onCancelRemove: () => void
+  onRequestRemove: (symbol: string) => void
+  isConfirming: boolean
+}) {
+  const board = boardTag(r.symbol)
+  const price = r.rt_price ?? r.close
+  const pct = r.rt_pct ?? r.change_pct
+  const name = r.rt_name ?? r.name
+  const signals = getSignals(r)
+  const isUp = (pct ?? 0) > 0
+  const isDown = (pct ?? 0) < 0
+
+  // 动态背景渐变: 涨=红底, 跌=绿底, 平=无色
+  const bgGlow = isUp
+    ? 'bg-gradient-to-br from-bull/[0.06] via-transparent to-bull/[0.02]'
+    : isDown
+      ? 'bg-gradient-to-br from-bear/[0.06] via-transparent to-bear/[0.02]'
+      : ''
+  // 左侧指示条颜色
+  const barColor = isUp ? 'bg-bull/70' : isDown ? 'bg-bear/70' : 'bg-muted/30'
+  // 涨跌幅标签背景
+  const pctBg = isUp ? 'bg-bull/12 text-bull' : isDown ? 'bg-bear/12 text-bear' : 'bg-elevated text-secondary'
+
+  return (
+    <div
+      className={`relative rounded-lg border border-border bg-surface hover:border-border/80 transition-all duration-200 group cursor-pointer overflow-hidden ${bgGlow}`}
+      onClick={() => onPreview(r.symbol, name ?? '')}
+    >
+      {/* 左侧彩色指示条 */}
+      <div className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg ${barColor}`} />
+
+      {/* 删除按钮 / 确认区 */}
+      <div className="absolute top-1.5 right-1.5 z-10">
+        {isConfirming ? (
+          <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => onConfirmRemove(r.symbol)}
+              className="px-1.5 py-0.5 rounded text-[10px] text-danger bg-danger/10 hover:bg-danger/20 transition-colors"
+            >
+              确认
+            </button>
+            <button onClick={() => onCancelRemove()} className="p-0.5 text-muted hover:text-foreground transition-colors">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={e => { e.stopPropagation(); onRequestRemove(r.symbol) }}
+            className="opacity-0 group-hover:opacity-100 text-muted hover:text-danger transition-all duration-150 p-0.5 rounded hover:bg-elevated"
+            aria-label="移出板块"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* 卡片内容 */}
+      <div className="pl-4 pr-2.5 pt-2.5 pb-0">
+        {/* 第一行: 代码 + 名称 + 板块标识 */}
+        <div className="flex items-center gap-1.5 min-w-0 mb-2">
+          <span className="shrink-0 font-mono text-foreground text-xs tracking-wide">
+            {r.symbol}
+          </span>
+          {name && (
+            <span className="text-xs text-secondary truncate">{name}</span>
+          )}
+          {board && (
+            <span className={`shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded text-[9px] font-bold leading-none ${board.color}`}>
+              {board.label}
+            </span>
+          )}
+          {r.consecutive_limit_ups > 0 && (
+            <span className="shrink-0 inline-flex items-center justify-center px-1 h-[16px] rounded bg-danger/15 text-danger text-[9px] font-bold tabular-nums">
+              {r.consecutive_limit_ups === 1 ? '首板' : `${r.consecutive_limit_ups}连`}
+            </span>
+          )}
+        </div>
+
+        {/* 第二行: 大价格 + 涨跌幅胶囊 */}
+        <div className="flex items-end justify-between gap-2 mb-2">
+          <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
+            {fmtPrice(price)}
+          </span>
+          {pct != null && (
+            <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
+              {isUp ? '+' : ''}{pct.toFixed(2)}%
+            </span>
+          )}
+        </div>
+
+        {/* 第三行: 指标 */}
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] text-muted leading-relaxed">
+          <span title="换手率">换手<span className={`font-mono ml-0.5 ${turnoverColor(r.turnover_rate)}`}>{r.turnover_rate != null ? `${r.turnover_rate.toFixed(2)}%` : '—'}</span></span>
+          <span title="量比">量比<span className="font-mono ml-0.5">{fmtPrice(r.vol_ratio_5d)}</span></span>
+          <span title="RSI14">RSI<span className="font-mono ml-0.5">{r.rsi_14 != null ? r.rsi_14.toFixed(1) : '—'}</span></span>
+        </div>
+      </div>
+
+      {/* 信号标签区 */}
+      {signals.length > 0 && (
+        <div className="pl-4 pr-2.5 pt-1.5 pb-2 flex flex-wrap gap-1">
+          {signals.slice(0, 3).map(s => (
+            <span key={s.label} className={`inline-block px-1.5 py-[1px] rounded text-[9px] font-medium leading-tight ${signalCls(s.type)}`}>
+              {s.label}
+            </span>
+          ))}
+          {signals.length > 3 && (
+            <span className="inline-block px-1 py-[1px] rounded text-[9px] text-muted bg-elevated leading-tight">
+              +{signals.length - 3}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+})
+
 // 单个板块卡片组件 - 接收数据作为 props
 function GroupCard({
   group,
@@ -251,35 +414,38 @@ export function WatchlistGroups() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  const [sidebarSettingsMenuOpen, setSidebarSettingsMenuOpen] = useState(false)
   const [currentGroupForDialog, setCurrentGroupForDialog] = useState<WatchlistGroup | null>(null)
+  const sidebarSettingsMenuRef = useRef<HTMLDivElement>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
-  const settingsMenuRef = useRef<HTMLDivElement>(null)
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
-  // 设置查询
+  // 视图模式（列表/卡片）- 自选板块专用
+  const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
+    return (storage.watchlistGroupsView.get('table') as 'table' | 'card')
+  })
+
+  // 列配置 - 自选板块专用
+  const [columns, setColumns] = useState<ColumnConfig[]>([...BUILTIN_COLUMNS])
+  const [customizerOpen, setCustomizerOpen] = useState(false)
+  const columnsLoaded = useRef(false)
+
+  // 设置查询（仅用于侧边栏/卡片视图切换和平均涨跌幅模式）
   const settingsQuery = useQuery({
     queryKey: ['watchlist-groups-settings'],
     queryFn: () => api.watchlistGroups.getSettings(),
     staleTime: Infinity,
   })
 
-  // 从设置中获取或使用默认值
-  const viewMode = (settingsQuery.data?.view_mode as 'sidebar' | 'cards') || 'sidebar'
-  const displayStyle = (settingsQuery.data?.display_style as 'compact' | 'standard' | 'detailed') || 'standard'
+  // 从设置中获取或使用默认值（仅保留侧边栏/卡片视图和平均涨跌幅模式）
+  const sidebarOrCardsView = (settingsQuery.data?.view_mode as 'sidebar' | 'cards') || 'sidebar'
   const avgPctMode = (settingsQuery.data?.avg_pct_mode as 'simple' | 'weighted') || 'simple'
 
-  // 设置变更 mutations
-  const setViewModeMutation = useMutation({
+  // 所有的 mutations 定义在前面
+  const setSidebarOrCardsViewMutation = useMutation({
     mutationFn: (mode: string) => api.watchlistGroups.setViewMode(mode),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['watchlist-groups-settings'] })
-    },
-  })
-
-  const setDisplayStyleMutation = useMutation({
-    mutationFn: (style: string) => api.watchlistGroups.setDisplayStyle(style),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-settings'] })
     },
@@ -291,30 +457,6 @@ export function WatchlistGroups() {
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-settings'] })
     },
   })
-
-  const groupsQuery = useQuery({ queryKey: QK.watchlistGroups, queryFn: api.watchlistGroups.list })
-
-  const selectedGroupItemsQuery = useQuery({
-    queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId || ''),
-    queryFn: () => selectedGroupId ? api.watchlistGroups.listItemsEnriched(selectedGroupId) : null,
-    enabled: !!selectedGroupId,
-  })
-
-  useEffect(() => {
-    if (groupsQuery.data?.groups?.length && !selectedGroupId) {
-      setSelectedGroupId(groupsQuery.data.groups[0].group_id)
-    }
-  }, [groupsQuery.data])
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (settingsMenuRef.current && !settingsMenuRef.current.contains(event.target as Node)) {
-        setSettingsMenuOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   const createMutation = useMutation({
     mutationFn: (name: string) => api.watchlistGroups.create(name),
@@ -378,6 +520,89 @@ export function WatchlistGroups() {
     onError: (e: any) => toast(e.message || '移除失败', 'error'),
   })
 
+  const moveItemToTopMutation = useMutation({
+    mutationFn: ({ groupId, symbols }: { groupId: string; symbols: string[] }) =>
+      api.watchlistGroups.reorderItems(groupId, symbols),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      if (selectedGroupId) {
+        queryClient.invalidateQueries({ queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId) })
+      }
+    },
+    onError: (e: any) => toast(e.message || '置顶失败', 'error'),
+  })
+
+  // 加载列配置
+  useEffect(() => {
+    if (columnsLoaded.current) return
+    columnsLoaded.current = true
+    loadColumnConfig().then(setColumns)
+  }, [])
+
+  // 视图模式切换处理
+  const toggleView = useCallback(() => {
+    setViewMode(v => {
+      const next = v === 'table' ? 'card' : 'table'
+      storage.watchlistGroupsView.set(next)
+      return next
+    })
+  }, [])
+
+  // 列配置变更处理
+  const handleColumnsChange = useCallback((next: ColumnConfig[]) => {
+    setColumns(next)
+    saveColumnConfig(next)
+  }, [])
+
+  // 计算可见列
+  const visibleColumns = useMemo(() => {
+    return columns.filter(c => c.visible)
+  }, [columns])
+
+  // 卡片列数
+  const cardColumns = useCardColumnCount()
+
+  // 稳定的回调函数（需要用到 removeItemMutation，所以放在它后面）
+  const handleCardPreview = useCallback((sym: string, name: string) => {
+    setPreviewSymbol(sym)
+    setPreviewName(name)
+  }, [])
+
+  const handleCardConfirmRemove = useCallback((sym: string) => {
+    if (!selectedGroupId) return
+    removeItemMutation.mutate({ groupId: selectedGroupId, symbol: sym })
+    setConfirmRemove(null)
+  }, [selectedGroupId, removeItemMutation])
+
+  const handleCardCancelRemove = useCallback(() => setConfirmRemove(null), [])
+
+  const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
+
+  // 数据查询
+  const groupsQuery = useQuery({ queryKey: QK.watchlistGroups, queryFn: api.watchlistGroups.list })
+
+  const selectedGroupItemsQuery = useQuery({
+    queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId || ''),
+    queryFn: () => selectedGroupId ? api.watchlistGroups.listItemsEnriched(selectedGroupId) : null,
+    enabled: !!selectedGroupId,
+  })
+
+  useEffect(() => {
+    if (groupsQuery.data?.groups?.length && !selectedGroupId) {
+      setSelectedGroupId(groupsQuery.data.groups[0].group_id)
+    }
+  }, [groupsQuery.data])
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (sidebarSettingsMenuRef.current && !sidebarSettingsMenuRef.current.contains(event.target as Node)) {
+        setSidebarSettingsMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
   // 前端计算板块平均涨跌幅
   const calculateGroupAvgChange = useCallback((group: any, allGroupItems?: Record<string, any[]>) => {
     const items = allGroupItems?.[group.group_id]
@@ -427,58 +652,97 @@ export function WatchlistGroups() {
     staleTime: 60_000,
   })
 
-  // 根据展示样式选择要显示的列
-  const columnsForStyle = useMemo(() => {
-    // 精简模式：只显示代码/名称、价格、涨跌幅
-    const compactKeys = ['symbol', 'price', 'pct']
-    // 标准模式：显示常用列
-    const standardKeys = ['symbol', 'price', 'pct', 'turnover', 'vol_ratio', 'rsi14', 'momentum', 'limit_ups', 'signals']
-    
-    if (displayStyle === 'compact') {
-      return BUILTIN_COLUMNS.filter(c => 
-        c.source.type === 'builtin' && compactKeys.includes(c.source.key)
-      )
-    } else if (displayStyle === 'standard') {
-      return BUILTIN_COLUMNS.filter(c => 
-        c.source.type === 'builtin' && standardKeys.includes(c.source.key)
-      )
-    } else { // detailed
-      // 详细模式：显示所有可见列
-      return BUILTIN_COLUMNS.filter(c => c.visible || c.pinned)
-    }
-  }, [displayStyle])
 
   const renderCell = useCallback((row: any, col: ColumnConfig): React.ReactNode => {
     if (col.source.type === 'builtin' && col.source.key === 'symbol') {
+      const currentGroupItems = selectedGroupItemsQuery.data?.rows || []
+      const currentSymbols = currentGroupItems.map(r => r.symbol)
+      const isFirst = currentSymbols[0] === row.symbol
+
       return (
-        <td key={col.id} className="px-4 py-2">
-          <div className="flex items-center gap-2">
+        <td key={col.id} className="px-1.5 py-1.5">
+          <div className="flex items-center gap-1 w-full">
             <button
               type="button"
               onClick={() => {
                 setPreviewSymbol(row.symbol)
                 setPreviewName(row.name ?? '')
               }}
-              className="flex items-center gap-2 text-left"
+              className="flex items-center gap-1 text-left min-w-0"
             >
-              <span className="font-mono text-secondary group-hover:text-accent transition-colors duration-150 leading-snug">{row.symbol}</span>
+              <span className="font-mono text-foreground text-xs group-hover:text-accent transition-colors duration-150">
+                {row.symbol}
+              </span>
               {row.name && (
-                <span className="text-[11px] text-muted truncate group-hover:text-secondary transition-colors duration-150 leading-snug">{row.name}</span>
+                <span className="text-xs text-muted truncate group-hover:text-secondary transition-colors duration-150">
+                  {row.name}
+                </span>
               )}
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!selectedGroupId) return
-                removeItemMutation.mutate({ groupId: selectedGroupId, symbol: row.symbol })
-              }}
-              disabled={removeItemMutation.isPending}
-              className="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full border border-border text-muted hover:text-red-400 hover:border-red-400 transition-colors cursor-pointer disabled:opacity-50"
-              title="移出板块"
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
+            {/* 删除入口：默认减号图标，二次确认时替换为确定按钮 */}
+            <div className="ml-auto pl-1 shrink-0">
+              {confirmRemove === row.symbol ? (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => {
+                      if (!selectedGroupId) return
+                      removeItemMutation.mutate({ groupId: selectedGroupId, symbol: row.symbol })
+                      setConfirmRemove(null)
+                    }}
+                    className="px-1.5 py-0.5 rounded text-[10px] text-danger bg-danger/10 hover:bg-danger/20 transition-colors"
+                  >
+                    确认
+                  </button>
+                  <button
+                    onClick={() => setConfirmRemove(null)}
+                    className="p-0.5 text-muted hover:text-foreground transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setConfirmRemove(row.symbol)}
+                    className="p-0.5 text-muted hover:text-danger transition-colors duration-150 ease-smooth"
+                    aria-label="移除"
+                    title="移除"
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!selectedGroupId) return
+                      const newSymbols = [row.symbol, ...currentSymbols.filter(s => s !== row.symbol)]
+                      moveItemToTopMutation.mutate({ groupId: selectedGroupId, symbols: newSymbols })
+                    }}
+                    disabled={moveItemToTopMutation.isPending || isFirst}
+                    className="p-0.5 text-muted hover:text-accent transition-colors duration-150 ease-smooth disabled:opacity-30 disabled:hover:text-muted"
+                    aria-label="移到顶部"
+                    title="移到顶部"
+                  >
+                    <ChevronsUp className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
+        </td>
+      )
+    }
+    // 日K蜡烛图列
+    if (col.source.type === 'builtin' && col.source.key === 'candle') {
+      return (
+        <td key={col.id} className="px-2 py-1.5">
+          {/* 暂时不实现蜡烛图，占位 */}
+        </td>
+      )
+    }
+    // 分时图列
+    if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+      return (
+        <td key={col.id} className="px-2 py-1.5">
+          {/* 暂时不实现分时图，占位 */}
         </td>
       )
     }
@@ -490,14 +754,106 @@ export function WatchlistGroups() {
       <div className="w-64 border-r bg-surface p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">板块</h2>
-          <button
-            type="button"
-            onClick={() => setCreateDialogOpen(true)}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-xs bg-accent text-white hover:bg-accent/90 transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            新建
-          </button>
+          <div className="relative" ref={sidebarSettingsMenuRef}>
+            <button
+              type="button"
+              onClick={() => setSidebarSettingsMenuOpen(!sidebarSettingsMenuOpen)}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+            <AnimatePresence>
+              {sidebarSettingsMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="absolute right-0 top-full mt-1 w-40 bg-surface border border-border rounded-btn shadow-xl z-50"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSidebarSettingsMenuOpen(false)
+                      setCreateDialogOpen(true)
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    新建板块
+                  </button>
+                  {selectedGroupId && (
+                    <>
+                      <div className="border-t border-border my-1" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSidebarSettingsMenuOpen(false)
+                          const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
+                          if (group) {
+                            setCurrentGroupForDialog(group)
+                            setNewGroupName(group.name)
+                            setRenameDialogOpen(true)
+                          }
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
+                      >
+                        <Edit2 className="h-3.5 w-3.5" />
+                        重命名板块
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSidebarSettingsMenuOpen(false)
+                          const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
+                          if (group) {
+                            setCurrentGroupForDialog(group)
+                            setDeleteDialogOpen(true)
+                          }
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2 text-danger"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        删除板块
+                      </button>
+                    </>
+                  )}
+                  <div className="border-t border-border my-1" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSidebarSettingsMenuOpen(false)
+                      setAvgPctModeMutation.mutate('simple')
+                    }}
+                    disabled={setAvgPctModeMutation.isPending}
+                    className={cn(
+                      'w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2',
+                      avgPctMode === 'simple' ? 'text-accent bg-accent/10' : ''
+                    )}
+                  >
+                    {avgPctMode === 'simple' && <Check className="h-3.5 w-3.5" />}
+                    {avgPctMode !== 'simple' && <span className="w-3.5 h-3.5" />}
+                    算术平均
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSidebarSettingsMenuOpen(false)
+                      setAvgPctModeMutation.mutate('weighted')
+                    }}
+                    disabled={setAvgPctModeMutation.isPending}
+                    className={cn(
+                      'w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2',
+                      avgPctMode === 'weighted' ? 'text-accent bg-accent/10' : ''
+                    )}
+                  >
+                    {avgPctMode === 'weighted' && <Check className="h-3.5 w-3.5" />}
+                    {avgPctMode !== 'weighted' && <span className="w-3.5 h-3.5" />}
+                    加权平均
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
         <div className="space-y-2">
           {groupsQuery.data?.groups?.map((group) => {
@@ -539,70 +895,67 @@ export function WatchlistGroups() {
                   existingSymbols={selectedGroupItemsQuery.data?.rows?.map(r => r.symbol) ?? []}
                   onAdd={(sym) => addItemMutation.mutate({ groupId: selectedGroupId, symbol: sym })}
                 />
-                <div className="relative" ref={settingsMenuRef}>
-                  <button
-                    type="button"
-                    onClick={() => setSettingsMenuOpen(!settingsMenuOpen)}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-xs bg-elevated hover:bg-elevated/80 transition-colors"
-                  >
-                    <Settings className="h-4 w-4" />
-                    设置
-                  </button>
-                  <AnimatePresence>
-                    {settingsMenuOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        className="absolute right-0 top-full mt-1 w-48 bg-surface border border-border rounded-btn shadow-xl z-50"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSettingsMenuOpen(false)
-                            const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
-                            if (group) {
-                              setCurrentGroupForDialog(group)
-                              setNewGroupName(group.name)
-                              setRenameDialogOpen(true)
-                            }
-                          }}
-                          className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
-                        >
-                          <Edit2 className="h-3.5 w-3.5" />
-                          重命名板块
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSettingsMenuOpen(false)
-                            const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
-                            if (group) {
-                              setCurrentGroupForDialog(group)
-                              setDeleteDialogOpen(true)
-                            }
-                          }}
-                          className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2 text-danger"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          删除板块
-                        </button>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
+                <div className="w-px h-5 bg-border" />
+                {/* 视图切换按钮 */}
+                <button
+                  onClick={toggleView}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                  title={viewMode === 'table' ? '卡片视图' : '列表视图'}
+                >
+                  {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
+                </button>
+                <div className="w-px h-5 bg-border" />
+                {/* 自定义列按钮 */}
+                <button
+                  onClick={() => setCustomizerOpen(true)}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                  title="自定义列"
+                >
+                  <Settings2 className="h-4 w-4" />
+                </button>
+                {/* 刷新按钮 */}
+                <button
+                  onClick={() => selectedGroupItemsQuery.refetch()}
+                  disabled={selectedGroupItemsQuery.isFetching}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
+                  title="刷新"
+                >
+                  <RefreshCw className={`h-4 w-4 ${selectedGroupItemsQuery.isFetching ? 'animate-spin' : ''}`} />
+                </button>
               </div>
             </div>
             {selectedGroupItemsQuery.isLoading ? (
               <EmptyState title="加载中…" />
             ) : selectedGroupItemsQuery.data?.rows && selectedGroupItemsQuery.data.rows.length > 0 ? (
-              <StockDataTable
-                columns={columnsForStyle}
-                rows={selectedGroupItemsQuery.data.rows}
-                renderCell={renderCell}
-                headerSticky={true}
-                rowKey={(row) => row.symbol}
-              />
+              viewMode === 'table' ? (
+                <StockDataTable
+                  columns={visibleColumns}
+                  rows={selectedGroupItemsQuery.data.rows}
+                  renderCell={renderCell}
+                  headerSticky={true}
+                  rowKey={(row) => row.symbol}
+                />
+              ) : (
+                <div className={`grid gap-3 ${
+                  cardColumns === 6 ? '2xl:grid-cols-6' :
+                  cardColumns === 5 ? 'xl:grid-cols-5' :
+                  cardColumns === 4 ? 'md:grid-cols-4' :
+                  cardColumns === 3 ? 'sm:grid-cols-3' :
+                  'grid-cols-2'
+                }`}>
+                  {selectedGroupItemsQuery.data.rows.map((row) => (
+                    <StockCard
+                      key={row.symbol}
+                      r={row}
+                      onPreview={handleCardPreview}
+                      onConfirmRemove={handleCardConfirmRemove}
+                      onCancelRemove={handleCardCancelRemove}
+                      onRequestRemove={handleCardRequestRemove}
+                      isConfirming={confirmRemove === row.symbol}
+                    />
+                  ))}
+                </div>
+              )
             ) : (
               <EmptyState title="该板块暂无股票" hint="点击右上角新建板块或添加股票" />
             )}
@@ -676,15 +1029,15 @@ export function WatchlistGroups() {
     <div className="h-full">
       <div className="border-b border-border px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          {/* 视图模式切换 */}
+          {/* 侧边栏/卡片视图切换（保留原有功能） */}
           <div className="inline-flex rounded-btn border border-border overflow-hidden">
             <button
               type="button"
-              onClick={() => setViewModeMutation.mutate('sidebar')}
-              disabled={setViewModeMutation.isPending}
+              onClick={() => setSidebarOrCardsViewMutation.mutate('sidebar')}
+              disabled={setSidebarOrCardsViewMutation.isPending}
               className={cn(
                 'px-3 py-1 text-xs transition-colors flex items-center gap-1',
-                viewMode === 'sidebar' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
+                sidebarOrCardsView === 'sidebar' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
               )}
             >
               <List className="h-3.5 w-3.5" />
@@ -692,85 +1045,20 @@ export function WatchlistGroups() {
             </button>
             <button
               type="button"
-              onClick={() => setViewModeMutation.mutate('cards')}
-              disabled={setViewModeMutation.isPending}
+              onClick={() => setSidebarOrCardsViewMutation.mutate('cards')}
+              disabled={setSidebarOrCardsViewMutation.isPending}
               className={cn(
                 'px-3 py-1 text-xs transition-colors flex items-center gap-1',
-                viewMode === 'cards' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
+                sidebarOrCardsView === 'cards' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
               )}
             >
               <Grid className="h-3.5 w-3.5" />
               卡片
             </button>
           </div>
-
-          {/* 展示样式切换 */}
-          {viewMode === 'sidebar' && (
-            <div className="inline-flex rounded-btn border border-border overflow-hidden">
-              <button
-                type="button"
-                onClick={() => setDisplayStyleMutation.mutate('compact')}
-                disabled={setDisplayStyleMutation.isPending}
-                className={cn(
-                  'px-3 py-1 text-xs transition-colors',
-                  displayStyle === 'compact' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
-                )}
-              >
-                精简
-              </button>
-              <button
-                type="button"
-                onClick={() => setDisplayStyleMutation.mutate('standard')}
-                disabled={setDisplayStyleMutation.isPending}
-                className={cn(
-                  'px-3 py-1 text-xs transition-colors',
-                  displayStyle === 'standard' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
-                )}
-              >
-                标准
-              </button>
-              <button
-                type="button"
-                onClick={() => setDisplayStyleMutation.mutate('detailed')}
-                disabled={setDisplayStyleMutation.isPending}
-                className={cn(
-                  'px-3 py-1 text-xs transition-colors',
-                  displayStyle === 'detailed' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
-                )}
-              >
-                详细
-              </button>
-            </div>
-          )}
-
-          {/* 平均涨跌幅模式切换 */}
-          <div className="inline-flex rounded-btn border border-border overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setAvgPctModeMutation.mutate('simple')}
-              disabled={setAvgPctModeMutation.isPending}
-              className={cn(
-                'px-3 py-1 text-xs transition-colors',
-                avgPctMode === 'simple' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
-              )}
-            >
-              算术平均
-            </button>
-            <button
-              type="button"
-              onClick={() => setAvgPctModeMutation.mutate('weighted')}
-              disabled={setAvgPctModeMutation.isPending}
-              className={cn(
-                'px-3 py-1 text-xs transition-colors',
-                avgPctMode === 'weighted' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
-              )}
-            >
-              加权平均
-            </button>
-          </div>
         </div>
       </div>
-      {viewMode === 'sidebar' ? renderSidebarView() : renderCardsView()}
+      {sidebarOrCardsView === 'sidebar' ? renderSidebarView() : renderCardsView()}
 
       {createDialogOpen && (
         <Modal
@@ -946,6 +1234,14 @@ export function WatchlistGroups() {
           setPreviewSymbol(null)
           setPreviewName('')
         }}
+      />
+
+      {/* 列自定义器 - 自选板块专用 */}
+      <ColumnCustomizer
+        columns={columns}
+        onChange={handleColumnsChange}
+        open={customizerOpen}
+        onClose={() => setCustomizerOpen(false)}
       />
     </div>
   )
