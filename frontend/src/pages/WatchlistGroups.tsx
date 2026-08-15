@@ -251,7 +251,6 @@ export function WatchlistGroups() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [addStockDialogOpen, setAddStockDialogOpen] = useState(false)
   const [currentGroupForDialog, setCurrentGroupForDialog] = useState<WatchlistGroup | null>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
@@ -523,14 +522,11 @@ export function WatchlistGroups() {
             <div className="flex items-center justify-between mb-6">
               <h1 className="text-2xl font-bold">{groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)?.name}</h1>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAddStockDialogOpen(true)}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-xs bg-accent text-white hover:bg-accent/90 transition-colors"
-                >
-                  <Plus className="h-4 w-4" />
-                  添加股票
-                </button>
+                <StockSearchBox
+                  onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
+                  existingSymbols={selectedGroupItemsQuery.data?.rows?.map(r => r.symbol) ?? []}
+                  onAdd={(sym) => addItemMutation.mutate({ groupId: selectedGroupId, symbol: sym })}
+                />
                 <button
                   type="button"
                   onClick={() => {
@@ -907,30 +903,6 @@ export function WatchlistGroups() {
         </Modal>
       )}
 
-      {addStockDialogOpen && selectedGroupId && (
-        <Modal
-          onClose={() => setAddStockDialogOpen(false)}
-          panelClassName="w-[90vw] max-w-md bg-surface border border-border rounded-lg shadow-xl"
-        >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <h2 className="text-lg font-semibold">添加股票到「{groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)?.name}」</h2>
-            <button
-              type="button"
-              onClick={() => setAddStockDialogOpen(false)}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-btn text-secondary hover:bg-elevated"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="p-4">
-            <StockSearchBox
-              onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
-              existingSymbols={selectedGroupItemsQuery.data?.rows?.map(r => r.symbol) ?? []}
-              onAdd={(sym) => addItemMutation.mutate({ groupId: selectedGroupId, symbol: sym })}
-            />
-          </div>
-        </Modal>
-      )}
 
       <StockPreviewDialog
         symbol={previewSymbol}
