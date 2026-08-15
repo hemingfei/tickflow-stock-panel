@@ -396,7 +396,7 @@ export function WatchlistGroups() {
     }
   }, [])
 
-  // 获取所有板块的 enriched 数据（用于卡片视图）
+  // 获取所有板块的 enriched 数据（用于卡片视图和侧边栏）
   const { data: allGroupItems } = useQuery({
     queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(',')],
     queryFn: async () => {
@@ -412,7 +412,7 @@ export function WatchlistGroups() {
       }
       return result
     },
-    enabled: viewMode === 'cards' && !!groupsQuery.data?.groups?.length,
+    enabled: !!groupsQuery.data?.groups?.length,
     staleTime: 60_000,
   })
 
@@ -490,7 +490,7 @@ export function WatchlistGroups() {
         </div>
         <div className="space-y-2">
           {groupsQuery.data?.groups?.map((group) => {
-            const rows = selectedGroupId === group.group_id ? selectedGroupItemsQuery.data?.rows : null
+            const rows = allGroupItems?.[group.group_id]
             const avgChange = rows ? calculateGroupAvgChange(group, { [group.group_id]: rows }) : { simple: null, weighted: null }
             const displayChange = avgPctMode === 'simple' ? avgChange.simple : avgChange.weighted
 
