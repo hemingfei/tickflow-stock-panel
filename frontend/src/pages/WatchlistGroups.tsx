@@ -6,6 +6,7 @@ import { toast } from '@/components/Toast'
 import { Modal } from '@/components/Modal'
 import { EmptyState } from '@/components/EmptyState'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
+import { useTableSort } from '@/components/stock-table/useTableSort'
 import { renderBuiltinDataCell, boardTag } from '@/components/stock-table/primitives'
 import { fmtPrice, fmtPct, priceColorClass } from '@/lib/format'
 import { QK } from '@/lib/queryKeys'
@@ -576,6 +577,9 @@ export function WatchlistGroups() {
   // 卡片列数
   const cardColumns = useCardColumnCount()
 
+  // 排序（复用共享三态排序 hook）
+  const { sort, toggle: handleSortToggle, sortRows } = useTableSort()
+
   // 稳定的回调函数（需要用到 removeItemMutation，所以放在它后面）
   const handleCardPreview = useCallback((sym: string, name: string) => {
     setPreviewSymbol(sym)
@@ -1028,10 +1032,12 @@ export function WatchlistGroups() {
               viewMode === 'table' ? (
                 <StockDataTable
                   columns={visibleColumns}
-                  rows={selectedGroupItemsQuery.data.rows}
+                  rows={sortRows(selectedGroupItemsQuery.data.rows, visibleColumns)}
                   renderCell={renderCell}
                   headerSticky={true}
                   rowKey={(row) => row.symbol}
+                  sort={sort}
+                  onSortToggle={handleSortToggle}
                 />
               ) : (
                 <div className={`grid gap-3 ${
@@ -1119,9 +1125,11 @@ export function WatchlistGroups() {
             ) : selectedGroupItemsQuery.data?.rows && selectedGroupItemsQuery.data.rows.length > 0 ? (
               <StockDataTable
                 columns={BUILTIN_COLUMNS}
-                rows={selectedGroupItemsQuery.data.rows}
+                rows={sortRows(selectedGroupItemsQuery.data.rows, BUILTIN_COLUMNS)}
                 renderCell={renderCell}
                 rowKey={(row) => row.symbol}
+                sort={sort}
+                onSortToggle={handleSortToggle}
               />
             ) : (
               <EmptyState title="该板块暂无股票" />
