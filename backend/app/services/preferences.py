@@ -822,6 +822,17 @@ def set_screener_result_columns(columns: list[dict]) -> list[dict]:
     return columns
 
 
+def get_watchlist_groups_columns() -> list[dict] | None:
+    """返回自选板块列表列配置。"""
+    return load().get("watchlist_groups_columns")
+
+
+def set_watchlist_groups_columns(columns: list[dict]) -> list[dict]:
+    """保存自选板块列表列配置。"""
+    save({"watchlist_groups_columns": columns})
+    return columns
+
+
 # ===== 首次使用引导 =====
 
 def get_onboarding_completed() -> bool:

@@ -1649,6 +1649,22 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ mode }),
       }),
+
+    getColumns: () =>
+      request<{ columns: any[] | null }>('/api/watchlist-groups/settings/columns'),
+
+    updateColumns: (columns: any[]) =>
+      request<{ columns: any[] }>('/api/watchlist-groups/settings/columns', {
+        method: 'PUT',
+        body: JSON.stringify({ columns }),
+      }),
+
+    listAllItemsEnriched: (extColumns?: string) =>
+      request<{ groups: Record<string, { rows: any[]; as_of: string | null; elapsed_ms: number }> }>(
+        extColumns
+          ? `/api/watchlist-groups/all-items-enriched?ext_columns=${encodeURIComponent(extColumns)}`
+          : '/api/watchlist-groups/all-items-enriched',
+      ),
   },
 
   screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index') => {

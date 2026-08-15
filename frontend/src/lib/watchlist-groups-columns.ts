@@ -30,22 +30,42 @@ export function serializeColumns(columns: ColumnConfig[]): ColumnConfig[] {
   return serializeColumnsBase(columns, ACTION_COLUMN_ID)
 }
 
-/** 序列化并保存到 localStorage（自选板块专用） */
+/** 序列化并保存到后端 + localStorage（自选板块专用） */
 export async function saveColumnConfig(columns: ColumnConfig[]): Promise<void> {
   const saveable = serializeColumns(columns)
-  // 只写 localStorage（自选板块暂时不做后端持久化）
+  // 同时写 localStorage（即时）和后端（持久化）
   storage.watchlistGroupsColumns.set(saveable)
+  try {
+    const { api } = await import('@/lib/api')
+    await api.watchlistGroups.updateColumns(saveable)
+  } catch {
+    // 后端不可用时 localStorage 仍有效
+  }
 }
 
-/** 加载列配置：从 localStorage 加载，最终用默认值（自选板块专用） */
+/** 加载列配置：优先后端，回退 localStorage，最终用默认值（自选板块专用） */
 export async function loadColumnConfig(): Promise<ColumnConfig[]> {
-  // 1. 尝试从 localStorage 加载
+  // 1. 尝试从后端加载
+  try {
+    const { api } = await import('@/lib/api')
+    const res = await api.watchlistGroups.getColumns()
+    if (res.columns && res.columns.length > 0) {
+      const merged = mergeColumns(res.columns, BUILTIN_COLUMNS)
+      // 同步到 localStorage
+      storage.watchlistGroupsColumns.set(serializeColumns(merged))
+      return merged
+    }
+  } catch {
+    // 后端不可用，继续尝试 localStorage
+  }
+
+  // 2. 尝试从 localStorage 加载
   const saved = storage.watchlistGroupsColumns.get([]) as ColumnConfig[]
   if (saved.length > 0) {
     return mergeColumns(saved, BUILTIN_COLUMNS)
   }
 
-  // 2. 默认值
+  // 3. 默认值
   return [...BUILTIN_COLUMNS]
 }
 

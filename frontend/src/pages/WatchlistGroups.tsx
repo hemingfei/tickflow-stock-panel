@@ -660,24 +660,25 @@ export function WatchlistGroups() {
   }, [])
 
   // 获取所有板块的 enriched 数据（用于卡片视图和侧边栏）
-  const { data: allGroupItemsRaw } = useQuery({
+  const { data: allGroupItemsResponse } = useQuery({
     queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(',')],
     queryFn: async () => {
-      if (!groupsQuery.data?.groups?.length) return {}
-      const result: Record<string, any[]> = {}
-      for (const group of groupsQuery.data.groups) {
-        try {
-          const data = await api.watchlistGroups.listItemsEnriched(group.group_id)
-          result[group.group_id] = data.rows || []
-        } catch {
-          result[group.group_id] = []
-        }
-      }
-      return result
+      if (!groupsQuery.data?.groups?.length) return { groups: {} }
+      return await api.watchlistGroups.listAllItemsEnriched()
     },
     enabled: !!groupsQuery.data?.groups?.length,
     staleTime: 60_000,
   })
+
+  // 从响应中提取数据
+  const allGroupItemsRaw = useMemo(() => {
+    if (!allGroupItemsResponse?.groups) return undefined
+    const result: Record<string, any[]> = {}
+    for (const groupId in allGroupItemsResponse.groups) {
+      result[groupId] = allGroupItemsResponse.groups[groupId].rows || []
+    }
+    return result
+  }, [allGroupItemsResponse])
 
   // 对个股进行排序
   const allGroupItems = useMemo(() => {

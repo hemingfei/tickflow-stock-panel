@@ -213,27 +213,18 @@ _WATCHLIST_COLS = [
 ]
 
 
-@router.get("/{group_id}/items/enriched")
-def group_items_enriched(
-    group_id: str,
-    request: Request,
-    ext_columns: str | None = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
-):
-    """自选板块 enriched 数据 — 直接从 enriched 最新日读取, 无即时计算。
-
-    ext_columns 参数示例: "industry_rating.score,fund_flow.net_inflow"
-    会动态 LEFT JOIN 对应的 ext_{config_id} DuckDB view。
-    """
+def _get_enriched_data_for_symbols(
+    symbols: list[str],
+    repo,
+    ext_columns: str | None = None,
+) -> tuple[list[dict], str | None, float]:
+    """获取指定 symbol 列表的 enriched 数据（内部公用函数）。"""
     t0 = time.perf_counter()
 
-    repo = request.app.state.repo
-    items = watchlist_groups_service.list_group_items(group_id)
-    symbols = [r["symbol"] for r in items]
     if not symbols:
-        return {"rows": [], "as_of": None, "elapsed_ms": 0}
+        return [], None, 0
 
-    # 按资产拆分自选 symbol; ETF enriched 是独立缓存, 仅自选真的含 ETF 才去加载
-    # (避免无 ETF 用户在缓存冷启动时触发 ETF 全量懒加载)
+    # 按资产拆分 symbol
     etf_set = repo.get_etf_symbol_set()
     index_set = repo.get_index_symbol_set()
     etf_symbols = [s for s in symbols if s in etf_set]
@@ -242,10 +233,6 @@ def group_items_enriched(
 
     df_e, cache_date = repo.get_enriched_latest()
 
-    # 以自选列表为主表 LEFT JOIN enriched, 保证自选的每一只都返回一行;
-    # 不在 enriched 缓存里的标的 (新股/冷门股/新用户未同步) 指标为 null, 前端渲染为 "—".
-    # 旧实现是 df_e.filter(is_in(stock_symbols)), 方向反了 (以 enriched 为主),
-    # 会把不在缓存 universe 里的自选股静默丢弃.
     if stock_symbols:
         watchlist_df = pl.DataFrame({"symbol": stock_symbols})
         if df_e.is_empty():
@@ -255,19 +242,16 @@ def group_items_enriched(
     else:
         df = pl.DataFrame()
 
-    # ETF 行合并; 缺失列 (换手率/涨跌停信号等) 为 null
     etf_date = None
     if etf_symbols:
         df_etf_all, etf_date = repo.get_enriched_latest_asset("etf")
         etf_watchlist_df = pl.DataFrame({"symbol": etf_symbols})
         if not df_etf_all.is_empty():
-            # ETF 同样以自选为主表 LEFT JOIN, 缺失标的指标为 null
             df_etf = etf_watchlist_df.join(df_etf_all, on="symbol", how="left")
         else:
             df_etf = etf_watchlist_df
         df = df_etf if df.is_empty() else pl.concat([df, df_etf], how="diagonal_relaxed")
 
-    # 指数行合并 (镜像 ETF 分支); 缺失列 (换手率/涨跌停信号等) 为 null
     index_date = None
     if index_symbols:
         df_idx_all, index_date = repo.get_enriched_latest_asset("index")
@@ -278,13 +262,11 @@ def group_items_enriched(
             df_idx = idx_watchlist_df
         df = df_idx if df.is_empty() else pl.concat([df, df_idx], how="diagonal_relaxed")
 
-    # as_of 取三类缓存中较旧者
     dates = [d for d in (cache_date if stock_symbols else None, etf_date, index_date) if d is not None]
     as_of = min(dates) if dates else None
     if df.is_empty():
-        return {"rows": [], "as_of": str(as_of) if as_of else None, "elapsed_ms": 0}
+        return [], str(as_of) if as_of else None, (time.perf_counter() - t0) * 1000
 
-    # JOIN float_shares (仅股票有) + 名称 (股票/ETF 统一走 get_name_map)
     df_i = repo.get_instruments()
     if not df_i.is_empty() and "float_shares" in df_i.columns:
         df = df.join(df_i.select(["symbol", "float_shares"]), on="symbol", how="left")
@@ -293,17 +275,14 @@ def group_items_enriched(
         pl.col("symbol").replace_strict(name_map, default=None, return_dtype=pl.Utf8).alias("name")
     )
 
-    # 标注资产类型: 前端据此渲染徽标/豁免板块筛选/分时列降级
     asset_map = {**{s: "etf" for s in etf_symbols}, **{s: "index" for s in index_symbols}}
     df = df.with_columns(
         pl.col("symbol").replace_strict(asset_map, default="stock", return_dtype=pl.Utf8).alias("asset_type")
     )
 
-    # 选择内置需要的列
     keep = [c for c in _WATCHLIST_COLS + ["name", "float_shares", "asset_type"] if c in df.columns]
     df = df.select(keep)
 
-    # 动态 JOIN 扩展数据表
     ext_specs = _parse_ext_columns(ext_columns) if ext_columns else []
     if ext_specs:
         db = repo.store.db
@@ -318,7 +297,6 @@ def group_items_enriched(
             view_name = f"ext_{config_id}"
             ext_col_name = f"{config_id}__{field_name}"
             try:
-                # 扩展时序数据必须只取最新分区；否则一个 symbol 会按历史分区数被 JOIN 放大。
                 cfg = configs.get(config_id)
                 if cfg:
                     ext_df, _ = _read_ext_dataframe(cfg, data_dir)
@@ -335,7 +313,6 @@ def group_items_enriched(
                     )
                     df = df.join(ext_df.select(["symbol", ext_col_name]), on="symbol", how="left")
             except Exception:
-                # view 不存在或字段不存在，尝试直接读 parquet
                 cfg = configs.get(config_id)
                 if cfg:
                     try:
@@ -351,7 +328,6 @@ def group_items_enriched(
                     except Exception as e2:
                         logger.debug("ext join fallback failed for %s.%s: %s", config_id, field_name, e2)
 
-    # sanitize NaN / Inf
     float_cols = [c for c in df.columns if df[c].dtype.is_float()]
     if float_cols:
         df = df.with_columns([
@@ -362,14 +338,78 @@ def group_items_enriched(
             for c in float_cols
         ])
 
-    # 按板块内顺序重排行
     order_map = {s: i for i, s in enumerate(symbols)}
     df = df.with_columns(pl.col("symbol").map_elements(lambda s: order_map.get(s, len(symbols)), return_dtype=pl.Int32).alias("_sort_order"))
     df = df.sort("_sort_order").drop("_sort_order")
 
     rows = df.to_dicts()
     elapsed = (time.perf_counter() - t0) * 1000
-    return {"rows": rows, "as_of": str(as_of) if as_of else None, "elapsed_ms": elapsed}
+    return rows, str(as_of) if as_of else None, elapsed
+
+
+@router.get("/{group_id}/items/enriched")
+def group_items_enriched(
+    group_id: str,
+    request: Request,
+    ext_columns: str | None = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
+):
+    """自选板块 enriched 数据 — 直接从 enriched 最新日读取, 无即时计算。
+
+    ext_columns 参数示例: "industry_rating.score,fund_flow.net_inflow"
+    会动态 LEFT JOIN 对应的 ext_{config_id} DuckDB view。
+    """
+    items = watchlist_groups_service.list_group_items(group_id)
+    symbols = [r["symbol"] for r in items]
+    rows, as_of, elapsed_ms = _get_enriched_data_for_symbols(symbols, request.app.state.repo, ext_columns)
+    return {"rows": rows, "as_of": as_of, "elapsed_ms": elapsed_ms}
+
+
+@router.get("/all-items-enriched")
+def all_groups_items_enriched(
+    request: Request,
+    ext_columns: str | None = Query(None, description="逗号分隔的 ext 列: config_id.field_name"),
+):
+    """批量获取所有自选板块的 enriched 数据。"""
+    t0 = time.perf_counter()
+
+    groups = watchlist_groups_service.get_groups_with_stats()
+    repo = request.app.state.repo
+
+    result = {}
+    global_as_of = None
+    all_symbols = []
+
+    # 先收集所有板块的 symbol，一次性获取 enriched 数据
+    group_symbols_map = {}
+    for group in groups:
+        items = watchlist_groups_service.list_group_items(group["group_id"])
+        symbols = [r["symbol"] for r in items]
+        group_symbols_map[group["group_id"]] = symbols
+        all_symbols.extend(symbols)
+
+    # 去重，一次性获取所有需要的 enriched 数据
+    unique_symbols = list(dict.fromkeys(all_symbols))
+    all_rows, as_of, _ = _get_enriched_data_for_symbols(unique_symbols, repo, ext_columns)
+
+    # 建立 symbol -> row 的映射
+    symbol_row_map = {row["symbol"]: row for row in all_rows}
+
+    # 为每个板块单独构建结果
+    for group_id, symbols in group_symbols_map.items():
+        # 按板块内顺序筛选和排序
+        group_rows = []
+        for symbol in symbols:
+            if symbol in symbol_row_map:
+                group_rows.append(symbol_row_map[symbol])
+        result[group_id] = {
+            "rows": group_rows,
+            "as_of": as_of,
+            "elapsed_ms": 0  # 单独计时意义不大
+        }
+
+    elapsed = (time.perf_counter() - t0) * 1000
+    logger.info("All groups enriched data loaded in %.2fms", elapsed)
+    return {"groups": result, "elapsed_ms": elapsed}
 
 
 def _parse_ext_columns(ext_columns: str) -> list[tuple[str, str]]:
@@ -430,3 +470,26 @@ def set_avg_pct_mode(req: SetAvgPctModeRequest):
     except Exception as e:
         logger.exception("Error setting avg pct mode")
         raise HTTPException(500, f"设置平均涨跌幅模式失败: {str(e)}") from e
+
+
+class UpdateColumnsRequest(BaseModel):
+    columns: list[dict]
+
+
+@router.get("/settings/columns")
+def get_columns():
+    try:
+        return {"columns": preferences.get_watchlist_groups_columns()}
+    except Exception as e:
+        logger.exception("Error getting columns")
+        raise HTTPException(500, f"获取列配置失败: {str(e)}") from e
+
+
+@router.put("/settings/columns")
+def update_columns(req: UpdateColumnsRequest):
+    try:
+        columns = preferences.set_watchlist_groups_columns(req.columns)
+        return {"columns": columns}
+    except Exception as e:
+        logger.exception("Error updating columns")
+        raise HTTPException(500, f"更新列配置失败: {str(e)}") from e
