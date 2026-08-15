@@ -1257,7 +1257,7 @@ export function WatchlistGroups() {
     <div className="h-full">
       <div className="border-b border-border px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          {/* 侧边栏/卡片视图切换（保留原有功能） */}
+          {/* 列表/卡片视图切换（保留原有功能） */}
           <div className="inline-flex rounded-btn border border-border overflow-hidden">
             <button
               type="button"
@@ -1269,7 +1269,7 @@ export function WatchlistGroups() {
               )}
             >
               <List className="h-3.5 w-3.5" />
-              侧边栏
+              列表
             </button>
             <button
               type="button"
