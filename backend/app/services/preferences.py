@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -23,9 +24,21 @@ def load() -> dict:
     p = _path()
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+            logger.warning("preferences.json is not a dict, resetting")
+        except json.JSONDecodeError as e:
+            logger.warning("preferences.json malformed JSON: %s, resetting", e)
         except Exception as e:  # noqa: BLE001
-            logger.warning("preferences.json malformed: %s", e)
+            logger.warning("preferences.json malformed: %s, resetting", e)
+        # 如果出现任何问题，尝试备份并重置
+        try:
+            backup_path = p.parent / f"preferences.json.bak.{int(time.time())}"
+            p.rename(backup_path)
+            logger.info("Backed up corrupted preferences to %s", backup_path)
+        except Exception:
+            pass
     return {}
 
 
@@ -835,3 +848,71 @@ def set_financial_sync_time(table: str, iso_ts: str) -> None:
     times = get_financial_sync_times()
     times[table] = iso_ts
     save({"financial_sync_times": times})
+
+
+# ===== 自选板块设置 =====
+
+def get_watchlist_groups_view_mode() -> str:
+    """获取板块视图模式: 'sidebar' (侧边栏+单板块) 或 'cards' (多板块卡片)。"""
+    try:
+        return str(load().get("watchlist_groups_view_mode", "sidebar")).strip()
+    except Exception as e:
+        logger.warning("Error getting watchlist_groups_view_mode: %s", e)
+        return "sidebar"
+
+
+def set_watchlist_groups_view_mode(mode: str) -> str:
+    """保存板块视图模式。"""
+    try:
+        mode = str(mode).strip()
+        if mode not in ["sidebar", "cards"]:
+            mode = "sidebar"
+        save({"watchlist_groups_view_mode": mode})
+        return mode
+    except Exception as e:
+        logger.warning("Error setting watchlist_groups_view_mode: %s", e)
+        return "sidebar"
+
+
+def get_watchlist_groups_display_style() -> str:
+    """获取板块展示样式: 'compact' (精简), 'standard' (标准), 'detailed' (详细)。"""
+    try:
+        return str(load().get("watchlist_groups_display_style", "standard")).strip()
+    except Exception as e:
+        logger.warning("Error getting watchlist_groups_display_style: %s", e)
+        return "standard"
+
+
+def set_watchlist_groups_display_style(style: str) -> str:
+    """保存板块展示样式。"""
+    try:
+        style = str(style).strip()
+        if style not in ["compact", "standard", "detailed"]:
+            style = "standard"
+        save({"watchlist_groups_display_style": style})
+        return style
+    except Exception as e:
+        logger.warning("Error setting watchlist_groups_display_style: %s", e)
+        return "standard"
+
+
+def get_watchlist_groups_avg_pct_mode() -> str:
+    """获取平均涨跌幅计算模式: 'simple' (算术平均) 或 'weighted' (加权平均)。"""
+    try:
+        return str(load().get("watchlist_groups_avg_pct_mode", "simple")).strip()
+    except Exception as e:
+        logger.warning("Error getting watchlist_groups_avg_pct_mode: %s", e)
+        return "simple"
+
+
+def set_watchlist_groups_avg_pct_mode(mode: str) -> str:
+    """保存平均涨跌幅计算模式。"""
+    try:
+        mode = str(mode).strip()
+        if mode not in ["simple", "weighted"]:
+            mode = "simple"
+        save({"watchlist_groups_avg_pct_mode": mode})
+        return mode
+    except Exception as e:
+        logger.warning("Error setting watchlist_groups_avg_pct_mode: %s", e)
+        return "simple"

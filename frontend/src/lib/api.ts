@@ -235,6 +235,26 @@ export interface WatchlistEntry {
   name?: string | null
 }
 
+// ===== Watchlist Groups =====
+export interface WatchlistGroup {
+  group_id: string
+  name: string
+  order: number
+  avg_change_pct?: number | null
+  avg_change_pct_weighted?: number | null
+  item_count: number
+  created_at: string
+}
+
+export interface WatchlistGroupItem {
+  group_id: string
+  symbol: string
+  order: number
+  added_at: string
+  note?: string
+  name?: string | null
+}
+
 export interface WatchlistImportCandidate {
   code: string
   symbol: string | null
@@ -1548,6 +1568,88 @@ export const api = {
         ? `/api/watchlist/enriched?ext_columns=${encodeURIComponent(extColumns)}`
         : '/api/watchlist/enriched',
     ),
+
+  watchlistGroups: {
+    list: () =>
+      request<{ groups: WatchlistGroup[] }>('/api/watchlist-groups'),
+
+    create: (name: string) =>
+      request<{ groups: WatchlistGroup[] }>('/api/watchlist-groups', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+
+    rename: (groupId: string, name: string) =>
+      request<{ groups: WatchlistGroup[] }>(`/api/watchlist-groups/${encodeURIComponent(groupId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+      }),
+
+    delete: (groupId: string) =>
+      request<{ groups: WatchlistGroup[] }>(`/api/watchlist-groups/${encodeURIComponent(groupId)}`, {
+        method: 'DELETE',
+      }),
+
+    reorder: (groupIds: string[]) =>
+      request<{ groups: WatchlistGroup[] }>('/api/watchlist-groups/order', {
+        method: 'POST',
+        body: JSON.stringify({ group_ids: groupIds }),
+      }),
+
+    listItems: (groupId: string) =>
+      request<{ items: WatchlistGroupItem[] }>(`/api/watchlist-groups/${encodeURIComponent(groupId)}/items`),
+
+    listItemsEnriched: (groupId: string, extColumns?: string) =>
+      request<{ rows: any[]; as_of: string | null; elapsed_ms: number }>(
+        extColumns
+          ? `/api/watchlist-groups/${encodeURIComponent(groupId)}/items/enriched?ext_columns=${encodeURIComponent(extColumns)}`
+          : `/api/watchlist-groups/${encodeURIComponent(groupId)}/items/enriched`,
+      ),
+
+    addItem: (groupId: string, symbol: string, note = '') =>
+      request<{ items: WatchlistGroupItem[] }>(`/api/watchlist-groups/${encodeURIComponent(groupId)}/items`, {
+        method: 'POST',
+        body: JSON.stringify({ symbol, note }),
+      }),
+
+    addItemsBatch: (groupId: string, symbols: string[], note = '') =>
+      request<{ items: WatchlistGroupItem[]; added: number }>(`/api/watchlist-groups/${encodeURIComponent(groupId)}/items/batch`, {
+        method: 'POST',
+        body: JSON.stringify({ symbols, note }),
+      }),
+
+    removeItem: (groupId: string, symbol: string) =>
+      request<{ items: WatchlistGroupItem[] }>(`/api/watchlist-groups/${encodeURIComponent(groupId)}/items/${encodeURIComponent(symbol)}`, {
+        method: 'DELETE',
+      }),
+
+    reorderItems: (groupId: string, symbols: string[]) =>
+      request<{ items: WatchlistGroupItem[] }>(`/api/watchlist-groups/${encodeURIComponent(groupId)}/items/order`, {
+        method: 'POST',
+        body: JSON.stringify({ symbols }),
+      }),
+
+    getSettings: () =>
+      request<{ view_mode: string; display_style: string; avg_pct_mode: string }>('/api/watchlist-groups/settings'),
+
+    setViewMode: (mode: string) =>
+      request<{ view_mode: string }>('/api/watchlist-groups/settings/view-mode', {
+        method: 'POST',
+        body: JSON.stringify({ mode }),
+      }),
+
+    setDisplayStyle: (style: string) =>
+      request<{ display_style: string }>('/api/watchlist-groups/settings/display-style', {
+        method: 'POST',
+        body: JSON.stringify({ style }),
+      }),
+
+    setAvgPctMode: (mode: string) =>
+      request<{ avg_pct_mode: string }>('/api/watchlist-groups/settings/avg-pct-mode', {
+        method: 'POST',
+        body: JSON.stringify({ mode }),
+      }),
+  },
 
   screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index') => {
     const data = await request<{ strategies: StrategyDetail[]; load_errors?: StrategyLoadError[] }>(

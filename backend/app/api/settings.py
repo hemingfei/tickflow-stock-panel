@@ -52,39 +52,43 @@ class TickflowKeyIn(BaseModel):
 @router.get("")
 def get_settings() -> dict:
     """返回当前配置概况(Key 脱敏)。"""
-    from app.config import settings
-    from app.services import preferences
-    from app.services.ai_provider import (
-        ai_configured,
-        current_ai_model,
-        current_codex_command,
-        current_codex_reasoning_effort,
-    )
+    try:
+        from app.config import settings
+        from app.services import preferences
+        from app.services.ai_provider import (
+            ai_configured,
+            current_ai_model,
+            current_codex_command,
+            current_codex_reasoning_effort,
+        )
 
-    key = secrets_store.get_tickflow_key()
-    ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
-    return {
-        "mode": tf_client.current_mode(),
-        "tickflow_api_key_masked": secrets_store.mask(key),
-        "has_tickflow_key": bool(key),
-        "tier_label": tier_label(),
-        "current_endpoint": tf_client.current_endpoint(),
-        "probe_log": probe_log(),
-        "missing_caps": missing_caps(),
-        "extras_caps": extras_caps(),
-        # 首次使用引导
-        "onboarding_completed": preferences.get_onboarding_completed(),
-        # AI 配置
-        "ai_provider": ai_provider,
-        "ai_base_url": secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
-        "ai_api_key_masked": secrets_store.mask(secrets_store.get_ai_key()),
-        "has_ai_key": bool(secrets_store.get_ai_key()),
-        "ai_configured": ai_configured(ai_provider),
-        "ai_model": current_ai_model(),
-        "ai_codex_command": current_codex_command(),
-        "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
-        "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
-    }
+        key = secrets_store.get_tickflow_key()
+        ai_provider = secrets_store.get_ai_config("ai_provider", settings.ai_provider)
+        return {
+            "mode": tf_client.current_mode(),
+            "tickflow_api_key_masked": secrets_store.mask(key),
+            "has_tickflow_key": bool(key),
+            "tier_label": tier_label(),
+            "current_endpoint": tf_client.current_endpoint(),
+            "probe_log": probe_log(),
+            "missing_caps": missing_caps(),
+            "extras_caps": extras_caps(),
+            # 首次使用引导
+            "onboarding_completed": preferences.get_onboarding_completed(),
+            # AI 配置
+            "ai_provider": ai_provider,
+            "ai_base_url": secrets_store.get_ai_config("ai_base_url", settings.ai_base_url),
+            "ai_api_key_masked": secrets_store.mask(secrets_store.get_ai_key()),
+            "has_ai_key": bool(secrets_store.get_ai_key()),
+            "ai_configured": ai_configured(ai_provider),
+            "ai_model": current_ai_model(),
+            "ai_codex_command": current_codex_command(),
+            "ai_codex_reasoning_effort": current_codex_reasoning_effort(),
+            "ai_user_agent": secrets_store.get_ai_config("ai_user_agent", settings.ai_user_agent),
+        }
+    except Exception as e:
+        logger.exception("Error getting settings")
+        raise HTTPException(status_code=500, detail=f"获取设置失败: {str(e)}") from e
 
 
 class SwitchEndpointIn(BaseModel):
@@ -400,59 +404,67 @@ class CustomSourceTestIn(BaseModel):
 @router.get("/preferences")
 def get_preferences() -> dict:
     """返回用户偏好设置。"""
-    from app.services import preferences
-    return {
-        "realtime_quotes_enabled": preferences.get_realtime_quotes_enabled(),
-        "realtime_allowed": _realtime_allowed(),
-        "indices_nav_pinned": preferences.get_indices_nav_pinned(),
-        "minute_sync_enabled": preferences.get_minute_sync_enabled(),
-        "minute_sync_days": preferences.get_minute_sync_days(),
-        "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
-        "daily_data_provider": preferences.get_daily_data_provider(),
-        "adj_factor_provider": preferences.get_adj_factor_provider(),
-        "minute_data_provider": preferences.get_minute_data_provider(),
-        "realtime_data_provider": preferences.get_realtime_data_provider(),
-        "financial_data_provider": preferences.get_financial_provider(),
-        "realtime_watchlist_symbols": preferences.get_realtime_watchlist_symbols(),
-        **preferences.get_realtime_quote_scope(),
-        "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
-        "pipeline_pull_etf": preferences.get_pipeline_pull_etf(),
-        "pipeline_pull_index": preferences.get_pipeline_pull_index(),
-        "pipeline_regime_enabled": preferences.get_pipeline_regime_enabled(),
-        "regime_batch_days": preferences.get_regime_batch_days(),
-        "regime_warmup_days": preferences.get_regime_warmup_days(),
-        "pipeline_index_symbols": preferences.get_pipeline_index_symbols(),
-        "pipeline_schedule": preferences.get_pipeline_schedule(),
-        "instruments_schedule": preferences.get_instruments_schedule(),
-        "enriched_batch_size": preferences.get_enriched_batch_size(),
-        "index_daily_batch_size": preferences.get_index_daily_batch_size(),
-        "watchlist_columns": preferences.get_watchlist_columns(),
-        "screener_result_columns": preferences.get_screener_result_columns(),
-        "sse_refresh_pages": preferences.get_sse_refresh_pages(),
-        "strategy_monitor_enabled": preferences.get_strategy_monitor_enabled(),
-        "strategy_monitor_ids": preferences.get_strategy_monitor_ids(),
-        "system_notify_enabled": preferences.get_system_notify_enabled(),
-        "feishu_webhook_url": preferences.get_feishu_webhook_url(),
-        "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
-        "wecom_webhook_url": preferences.get_wecom_webhook_url(),
-        "wecom_bot_id": preferences.get_wecom_bot_id(),
-        "wecom_bot_secret": preferences.get_wecom_bot_secret(),
-        "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
-        "webhook_enabled_default": preferences.get_webhook_enabled_default(),
-        "webhook_default_channels": preferences.get_webhook_default_channels(),
-        "sidebar_index_symbols": preferences.get_sidebar_index_symbols(),
-        "minute_intraday_refresh": preferences.get_minute_intraday_refresh(),
-        "minute_intraday_refresh_interval": preferences.get_minute_intraday_refresh_interval(),
-        "monitor_ext_fields": preferences.get_monitor_ext_fields(),
-        "nav_order": preferences.get_nav_order(),
-        "nav_hidden": preferences.get_nav_hidden(),
-        "screener_auto_run": preferences.get_screener_auto_run(),
-        "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
-        "depth_polling_interval": preferences.get_depth_polling_interval(),
-        "depth_finalize_time": preferences.get_depth_finalize_time(),
-        "review_schedule": preferences.get_review_schedule(),
-        "review_push_channels": preferences.get_review_push_channels(),
-    }
+    try:
+        from app.services import preferences
+        return {
+            "realtime_quotes_enabled": preferences.get_realtime_quotes_enabled(),
+            "realtime_allowed": _realtime_allowed(),
+            "indices_nav_pinned": preferences.get_indices_nav_pinned(),
+            "minute_sync_enabled": preferences.get_minute_sync_enabled(),
+            "minute_sync_days": preferences.get_minute_sync_days(),
+            "minute_sync_segment_days": preferences.get_minute_sync_segment_days(),
+            "daily_data_provider": preferences.get_daily_data_provider(),
+            "adj_factor_provider": preferences.get_adj_factor_provider(),
+            "minute_data_provider": preferences.get_minute_data_provider(),
+            "realtime_data_provider": preferences.get_realtime_data_provider(),
+            "financial_data_provider": preferences.get_financial_provider(),
+            "realtime_watchlist_symbols": preferences.get_realtime_watchlist_symbols(),
+            **preferences.get_realtime_quote_scope(),
+            "pipeline_pull_a_share": preferences.get_pipeline_pull_a_share(),
+            "pipeline_pull_etf": preferences.get_pipeline_pull_etf(),
+            "pipeline_pull_index": preferences.get_pipeline_pull_index(),
+            "pipeline_regime_enabled": preferences.get_pipeline_regime_enabled(),
+            "regime_batch_days": preferences.get_regime_batch_days(),
+            "regime_warmup_days": preferences.get_regime_warmup_days(),
+            "pipeline_index_symbols": preferences.get_pipeline_index_symbols(),
+            "pipeline_schedule": preferences.get_pipeline_schedule(),
+            "instruments_schedule": preferences.get_instruments_schedule(),
+            "enriched_batch_size": preferences.get_enriched_batch_size(),
+            "index_daily_batch_size": preferences.get_index_daily_batch_size(),
+            "watchlist_columns": preferences.get_watchlist_columns(),
+            "screener_result_columns": preferences.get_screener_result_columns(),
+            "sse_refresh_pages": preferences.get_sse_refresh_pages(),
+            "strategy_monitor_enabled": preferences.get_strategy_monitor_enabled(),
+            "strategy_monitor_ids": preferences.get_strategy_monitor_ids(),
+            "system_notify_enabled": preferences.get_system_notify_enabled(),
+            "feishu_webhook_url": preferences.get_feishu_webhook_url(),
+            "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
+            "wecom_webhook_url": preferences.get_wecom_webhook_url(),
+            "wecom_bot_id": preferences.get_wecom_bot_id(),
+            "wecom_bot_secret": preferences.get_wecom_bot_secret(),
+            "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
+            "webhook_enabled_default": preferences.get_webhook_enabled_default(),
+            "webhook_default_channels": preferences.get_webhook_default_channels(),
+            "sidebar_index_symbols": preferences.get_sidebar_index_symbols(),
+            "minute_intraday_refresh": preferences.get_minute_intraday_refresh(),
+            "minute_intraday_refresh_interval": preferences.get_minute_intraday_refresh_interval(),
+            "monitor_ext_fields": preferences.get_monitor_ext_fields(),
+            "nav_order": preferences.get_nav_order(),
+            "nav_hidden": preferences.get_nav_hidden(),
+            "screener_auto_run": preferences.get_screener_auto_run(),
+            "limit_ladder_monitor_enabled": preferences.get_limit_ladder_monitor_enabled(),
+            "depth_polling_interval": preferences.get_depth_polling_interval(),
+            "depth_finalize_time": preferences.get_depth_finalize_time(),
+            "review_schedule": preferences.get_review_schedule(),
+            "review_push_channels": preferences.get_review_push_channels(),
+            # Watchlist groups settings
+            "watchlist_groups_view_mode": preferences.get_watchlist_groups_view_mode(),
+            "watchlist_groups_display_style": preferences.get_watchlist_groups_display_style(),
+            "watchlist_groups_avg_pct_mode": preferences.get_watchlist_groups_avg_pct_mode(),
+        }
+    except Exception as e:
+        logger.exception("Error getting preferences")
+        raise HTTPException(status_code=500, detail=f"获取偏好设置失败: {str(e)}") from e
 
 
 @router.get("/data-sources")

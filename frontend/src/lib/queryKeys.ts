@@ -26,6 +26,8 @@ export const QK = {
   watchlistQuotes:      ['watchlist-quotes'] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext] as const,
   watchlistKlineBatch:  (symbols: string) => ['watchlist-kline-batch', symbols] as const,
+  watchlistGroups:      ['watchlist-groups'] as const,
+  watchlistGroupItemsEnriched: (groupId: string, ext?: string) => ['watchlist-group-items-enriched', groupId, ext] as const,
   // 不用 watchlist- 前缀: 避免被 SSE quotes_updated 高频失效(expert 1s/pro 2s)
   // 导致每次都拉 TickFlow 触限流。分时图用固定 refetchInterval 刷新即可。
   minuteBatch:          (symbols: string) => ['minute-batch', symbols] as const,
@@ -102,6 +104,7 @@ export const QK = {
 
 export const SSE_INVALIDATE_PREFIXES = [
   'watchlist',
+  'watchlist-groups',
   'quote-status',
   'index-quotes',
   'overview-market',

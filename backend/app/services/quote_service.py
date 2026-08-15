@@ -745,12 +745,21 @@ class QuoteService:
     def _fetch_watchlist_quotes(self) -> None:
         """Free 档自选股实时: 按 capability batch 上限分批拉取。"""
         from app.services import preferences
+        from app.services import watchlist_groups
         from app.tickflow.client import get_paid_realtime_client
         from app.tickflow.capabilities import Cap
         from app.tickflow.policy import detect_capabilities
         from app.tickflow.rate_limits import chunked, resolve_limit, sleep_between_batches
 
-        symbols = preferences.get_realtime_watchlist_symbols()
+        watchlist_symbols = preferences.get_realtime_watchlist_symbols()
+        group_symbols = watchlist_groups.get_all_watchlist_symbols()
+        # 合并去重，保持原有顺序
+        seen = set()
+        symbols = []
+        for s in watchlist_symbols + group_symbols:
+            if s not in seen:
+                seen.add(s)
+                symbols.append(s)
         # 指数监控规则标的并入轮询 (与股票共享 batch 额度)
         engine = getattr(self._app_state, "monitor_engine", None) if self._app_state else None
         if engine:
