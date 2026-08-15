@@ -324,8 +324,8 @@ function GroupCard({
   avgPctMode: 'simple' | 'weighted'
   items?: any[]
 }) {
-  const rows = items?.slice(0, 5) ?? []
   const allRows = items
+  const rows = allRows?.slice(0, 5) ?? []
   
   // 前端计算平均涨跌幅
   let avgSimple: number | null = null
@@ -361,29 +361,28 @@ function GroupCard({
       className="border border-border rounded-lg bg-surface cursor-pointer hover:border-accent/50 transition-colors"
       onClick={() => onSelect(group.group_id)}
     >
-      <div className="p-4 border-b border-border flex items-center justify-between">
+      <div className="p-2 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <h3 className="font-semibold">{group.name}</h3>
+          <h3 className="font-semibold text-sm">{group.name}</h3>
           {displayChange != null && (
-            <span className={`text-sm font-medium ${displayChange >= 0 ? 'text-bull' : 'text-bear'}`}>
+            <span className={`text-xs font-medium ${displayChange >= 0 ? 'text-bull' : 'text-bear'}`}>
               {fmtPct(displayChange)}
             </span>
           )}
         </div>
-        <span className="text-sm text-muted">{group.item_count} 只</span>
+        <span className="text-xs text-muted">{group.item_count} 只</span>
       </div>
-      <div className="p-4">
+      <div className="p-2">
         {rows.length > 0 ? (
           <>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {rows.map((row) => (
-                <div key={row.symbol} className="flex items-center justify-between py-1 text-sm">
+                <div key={row.symbol} className="flex items-center justify-between py-0.5 text-sm">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-secondary">{row.symbol}</span>
-                    {row.name && <span className="text-muted truncate">{row.name}</span>}
+                    {row.name && <span className="text-muted truncate text-sm">{row.name}</span>}
                   </div>
                   {row.change_pct != null && (
-                    <span className={`font-medium ${row.change_pct >= 0 ? 'text-bull' : 'text-bear'}`}>
+                    <span className={`font-medium text-sm ${row.change_pct >= 0 ? 'text-bull' : 'text-bear'}`}>
                       {fmtPct(row.change_pct)}
                     </span>
                   )}
@@ -394,14 +393,14 @@ function GroupCard({
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onSelect(group.group_id) }}
-                className="text-sm text-accent hover:underline mt-2"
+                className="text-xs text-accent hover:underline mt-1"
               >
                 查看全部 {group.item_count} 只
               </button>
             )}
           </>
         ) : (
-          <div className="text-sm text-muted">暂无股票</div>
+          <div className="text-xs text-muted">暂无股票</div>
         )}
       </div>
     </div>
@@ -424,6 +423,7 @@ export function WatchlistGroups() {
   const [previewName, setPreviewName] = useState<string>('')
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [sortMode, setSortMode] = useState<'custom' | 'ascending' | 'descending'>('custom')
+  const [stockSortMode, setStockSortMode] = useState<'default' | 'ascending' | 'descending'>('default')
 
   // 视图模式（列表/卡片）- 自选板块专用
   const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
@@ -660,7 +660,7 @@ export function WatchlistGroups() {
   }, [])
 
   // 获取所有板块的 enriched 数据（用于卡片视图和侧边栏）
-  const { data: allGroupItems } = useQuery({
+  const { data: allGroupItemsRaw } = useQuery({
     queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(',')],
     queryFn: async () => {
       if (!groupsQuery.data?.groups?.length) return {}
@@ -679,12 +679,41 @@ export function WatchlistGroups() {
     staleTime: 60_000,
   })
 
+  // 对个股进行排序
+  const allGroupItems = useMemo(() => {
+    if (!allGroupItemsRaw) return undefined
+    const result: Record<string, any[]> = {}
+    
+    for (const groupId in allGroupItemsRaw) {
+      const items = [...allGroupItemsRaw[groupId]]
+      if (stockSortMode !== 'default') {
+        items.sort((a, b) => {
+          const aPct = a.change_pct ?? 0
+          const bPct = b.change_pct ?? 0
+          return stockSortMode === 'descending' ? bPct - aPct : aPct - bPct
+        })
+      }
+      result[groupId] = items
+    }
+    
+    return result
+  }, [allGroupItemsRaw, stockSortMode])
+
   // 排序切换逻辑
   const toggleSortMode = useCallback(() => {
     setSortMode(mode => {
       if (mode === 'custom') return 'ascending'
       if (mode === 'ascending') return 'descending'
       return 'custom'
+    })
+  }, [])
+
+  // 个股排序切换逻辑
+  const toggleStockSortMode = useCallback(() => {
+    setStockSortMode(mode => {
+      if (mode === 'default') return 'descending'
+      if (mode === 'descending') return 'ascending'
+      return 'default'
     })
   }, [])
 
@@ -958,35 +987,33 @@ export function WatchlistGroups() {
                   selectedGroupId === group.group_id ? 'bg-elevated text-foreground' : 'hover:bg-elevated/30'
                 )}
               >
-                {sortMode === 'custom' && (
-                  <button
-                    onClick={handleMoveToTop}
-                    disabled={moveGroupToTopMutation.isPending || isFirst}
-                    className={cn(
-                      'p-1.5 rounded transition-colors',
-                      isFirst
-                        ? 'opacity-30 cursor-default'
-                        : 'text-muted hover:text-accent hover:bg-accent/10'
-                    )}
-                    title={isFirst ? '已在顶部' : '移到顶部'}
-                  >
-                    <ChevronsUp className="h-4 w-4" />
-                  </button>
-                )}
                 <button
                   onClick={() => setSelectedGroupId(group.group_id)}
                   className="flex-1 text-left min-w-0"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium truncate">{group.name}</span>
-                    <div className="flex items-center gap-2">
-                      {displayChange != null && (
-                        <span className={cn('text-xs font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
-                      )}
-                      <span className="text-xs opacity-70">{group.item_count} 只</span>
-                    </div>
-                  </div>
+                  <span className="font-medium truncate">{group.name}</span>
                 </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {displayChange != null && (
+                    <span className={cn('text-xs font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
+                  )}
+                  <span className="text-xs opacity-70">{group.item_count} 只</span>
+                  {sortMode === 'custom' && (
+                    <button
+                      onClick={handleMoveToTop}
+                      disabled={moveGroupToTopMutation.isPending || isFirst}
+                      className={cn(
+                        'p-1.5 rounded transition-colors',
+                        isFirst
+                          ? 'opacity-30 cursor-default'
+                          : 'text-muted hover:text-accent hover:bg-accent/10'
+                      )}
+                      title={isFirst ? '已在顶部' : '移到顶部'}
+                    >
+                      <ChevronsUp className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
               </div>
             )
           })}
@@ -1081,16 +1108,30 @@ export function WatchlistGroups() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">自选板块</h1>
-        <button
-          type="button"
-          onClick={() => setCreateDialogOpen(true)}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-xs bg-accent text-white hover:bg-accent/90 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          新建板块
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleStockSortMode}
+            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+            title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
+          >
+            {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
+            {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+            {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={toggleSortMode}
+            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+            title={sortMode === 'custom' ? '切换到板块按涨跌幅递增排序' : sortMode === 'ascending' ? '切换到板块按涨跌幅递减排序' : '切换到板块自定义排序'}
+          >
+            {sortMode === 'custom' && <ArrowUpDown className="h-4 w-4" />}
+            {sortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+            {sortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+          </button>
+        </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
         {sortedGroups.map((group) => (
           <GroupCard
             key={group.group_id}
