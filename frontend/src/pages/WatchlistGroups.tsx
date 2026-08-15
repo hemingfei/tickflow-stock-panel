@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Plus, List, Grid, Trash2, Edit2, X, Search, Check } from 'lucide-react'
+import { Plus, List, Grid, Trash2, Edit2, X, Search, Check, Settings } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from '@/components/Toast'
 import { Modal } from '@/components/Modal'
@@ -251,10 +251,12 @@ export function WatchlistGroups() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
   const [currentGroupForDialog, setCurrentGroupForDialog] = useState<WatchlistGroup | null>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
+  const settingsMenuRef = useRef<HTMLDivElement>(null)
 
   // 设置查询
   const settingsQuery = useQuery({
@@ -303,6 +305,16 @@ export function WatchlistGroups() {
       setSelectedGroupId(groupsQuery.data.groups[0].group_id)
     }
   }, [groupsQuery.data])
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(event.target as Node)) {
+        setSettingsMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const createMutation = useMutation({
     mutationFn: (name: string) => api.watchlistGroups.create(name),
@@ -527,35 +539,58 @@ export function WatchlistGroups() {
                   existingSymbols={selectedGroupItemsQuery.data?.rows?.map(r => r.symbol) ?? []}
                   onAdd={(sym) => addItemMutation.mutate({ groupId: selectedGroupId, symbol: sym })}
                 />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
-                    if (group) {
-                      setCurrentGroupForDialog(group)
-                      setNewGroupName(group.name)
-                      setRenameDialogOpen(true)
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-xs bg-elevated hover:bg-elevated/80 transition-colors"
-                >
-                  <Edit2 className="h-4 w-4" />
-                  重命名
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
-                    if (group) {
-                      setCurrentGroupForDialog(group)
-                      setDeleteDialogOpen(true)
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-xs bg-danger/10 text-danger hover:bg-danger/20 transition-colors"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  删除
-                </button>
+                <div className="relative" ref={settingsMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setSettingsMenuOpen(!settingsMenuOpen)}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-xs bg-elevated hover:bg-elevated/80 transition-colors"
+                  >
+                    <Settings className="h-4 w-4" />
+                    设置
+                  </button>
+                  <AnimatePresence>
+                    {settingsMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className="absolute right-0 top-full mt-1 w-48 bg-surface border border-border rounded-btn shadow-xl z-50"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettingsMenuOpen(false)
+                            const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
+                            if (group) {
+                              setCurrentGroupForDialog(group)
+                              setNewGroupName(group.name)
+                              setRenameDialogOpen(true)
+                            }
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                          重命名板块
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSettingsMenuOpen(false)
+                            const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
+                            if (group) {
+                              setCurrentGroupForDialog(group)
+                              setDeleteDialogOpen(true)
+                            }
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2 text-danger"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          删除板块
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             </div>
             {selectedGroupItemsQuery.isLoading ? (
