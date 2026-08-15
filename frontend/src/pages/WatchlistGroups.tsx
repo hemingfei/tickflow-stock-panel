@@ -1105,46 +1105,111 @@ export function WatchlistGroups() {
   )
 
   const renderCardsView = () => (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">自选板块</h1>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={toggleStockSortMode}
-            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-            title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
-          >
-            {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
-            {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
-            {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
-          </button>
-          <button
-            type="button"
-            onClick={toggleSortMode}
-            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-            title={sortMode === 'custom' ? '切换到板块按涨跌幅递增排序' : sortMode === 'ascending' ? '切换到板块按涨跌幅递减排序' : '切换到板块自定义排序'}
-          >
-            {sortMode === 'custom' && <ArrowUpDown className="h-4 w-4" />}
-            {sortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
-            {sortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
-          </button>
+    <div className="flex h-full">
+      {/* 左侧侧边栏 - 显示所有板块 */}
+      <div className="w-64 border-r bg-surface p-4 overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">板块</h2>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleSortMode}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+              title={sortMode === 'custom' ? '切换到按涨跌幅递增排序' : sortMode === 'ascending' ? '切换到按涨跌幅递减排序' : '切换到自定义排序'}
+            >
+              {sortMode === 'custom' && <ArrowUpDown className="h-4 w-4" />}
+              {sortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+              {sortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {sortedGroups.map((group, index) => {
+            const rows = allGroupItems?.[group.group_id]
+            const avgChange = rows ? calculateGroupAvgChange(group, { [group.group_id]: rows }) : { simple: null, weighted: null }
+            const displayChange = avgPctMode === 'simple' ? avgChange.simple : avgChange.weighted
+            const isFirst = index === 0 && sortMode === 'custom'
+
+            const handleMoveToTop = (e: React.MouseEvent) => {
+              e.stopPropagation()
+              const currentGroups = groupsQuery.data?.groups?.map(g => g.group_id) || []
+              const newOrder = [group.group_id, ...currentGroups.filter(id => id !== group.group_id)]
+              moveGroupToTopMutation.mutate(newOrder)
+            }
+
+            return (
+              <div
+                key={group.group_id}
+                className={cn(
+                  'flex items-center gap-2 p-2 rounded-btn transition-colors cursor-pointer',
+                  selectedGroupId === group.group_id ? 'bg-elevated text-foreground' : 'hover:bg-elevated/30'
+                )}
+                onClick={() => {
+                  setSelectedGroupId(group.group_id);
+                  setShowGroupModal(true);
+                }}
+              >
+                <span className="font-medium truncate flex-1">{group.name}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {displayChange != null && (
+                    <span className={cn('text-xs font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
+                  )}
+                  <span className="text-xs opacity-70">{group.item_count} 只</span>
+                  {sortMode === 'custom' && (
+                    <button
+                      onClick={handleMoveToTop}
+                      disabled={moveGroupToTopMutation.isPending || isFirst}
+                      className={cn(
+                        'p-1.5 rounded transition-colors',
+                        isFirst
+                          ? 'opacity-30 cursor-default'
+                          : 'text-muted hover:text-accent hover:bg-accent/10'
+                      )}
+                      title={isFirst ? '已在顶部' : '移到顶部'}
+                    >
+                      <ChevronsUp className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
-        {sortedGroups.map((group) => (
-          <GroupCard
-            key={group.group_id}
-            group={group}
-            onSelect={(id) => { 
-              setSelectedGroupId(id); 
-              setShowGroupModal(true); 
-            }}
-            avgPctMode={avgPctMode}
-            items={allGroupItems?.[group.group_id]}
-          />
-        ))}
+
+      {/* 右侧内容 - 板块卡片网格 */}
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold">自选板块</h1>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleStockSortMode}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+              title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
+            >
+              {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
+              {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+              {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+          {sortedGroups.map((group) => (
+            <GroupCard
+              key={group.group_id}
+              group={group}
+              onSelect={(id) => { 
+                setSelectedGroupId(id); 
+                setShowGroupModal(true); 
+              }}
+              avgPctMode={avgPctMode}
+              items={allGroupItems?.[group.group_id]}
+            />
+          ))}
+        </div>
       </div>
+
       {showGroupModal && selectedGroupId && (
         <Modal
           onClose={() => {
