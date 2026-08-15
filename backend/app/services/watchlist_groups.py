@@ -30,6 +30,16 @@ def _items_path() -> Path:
     return p
 
 
+def _handle_corrupted_file(p: Path) -> None:
+    """尝试删除损坏的文件。"""
+    if p.exists():
+        try:
+            p.unlink()
+            logger.info(f"Removed corrupted file: {p}")
+        except OSError as e:
+            logger.warning(f"Failed to remove corrupted file {p}: {e}")
+
+
 def list_groups() -> list[dict]:
     """列出所有板块，按 order 排序。"""
     p = _groups_path()
@@ -44,23 +54,18 @@ def list_groups() -> list[dict]:
         for col in required_cols:
             if col not in df.columns:
                 logger.warning(f"Missing required column '{col}' in groups file, will recreate")
-                # 删除损坏的文件
-                try:
-                    p.unlink()
-                    logger.info("Removed corrupted groups file")
-                except:
-                    pass
+                _handle_corrupted_file(p)
                 return []
         return df.sort("order").to_dicts()
+    except pl.exceptions.PolarsError as e:
+        logger.warning(f"Parquet parsing error for groups file: {e}, will try to remove corrupted file")
+    except OSError as e:
+        logger.warning(f"OS error reading groups file: {e}, will try to remove corrupted file")
     except Exception as e:
-        logger.warning(f"Error reading groups file: {e}, will try to remove corrupted file")
-        # 尝试删除损坏的文件
-        try:
-            p.unlink()
-            logger.info("Removed corrupted groups file")
-        except:
-            pass
-        return []
+        logger.warning(f"Unexpected error reading groups file: {e}", exc_info=True)
+    
+    _handle_corrupted_file(p)
+    return []
 
 
 def _get_group_by_name(name: str) -> dict | None:
@@ -79,9 +84,13 @@ def _get_group_by_name(name: str) -> dict | None:
         if matches.is_empty():
             return None
         return matches.to_dicts()[0]
+    except pl.exceptions.PolarsError as e:
+        logger.warning(f"Parquet parsing error for groups file: {e}")
+    except OSError as e:
+        logger.warning(f"OS error reading groups file: {e}")
     except Exception as e:
-        logger.warning(f"Error reading groups file: {e}")
-        return None
+        logger.warning(f"Unexpected error reading groups file: {e}", exc_info=True)
+    return None
 
 
 def _get_group_by_id(group_id: str) -> dict | None:
@@ -100,9 +109,13 @@ def _get_group_by_id(group_id: str) -> dict | None:
         if matches.is_empty():
             return None
         return matches.to_dicts()[0]
+    except pl.exceptions.PolarsError as e:
+        logger.warning(f"Parquet parsing error for groups file: {e}")
+    except OSError as e:
+        logger.warning(f"OS error reading groups file: {e}")
     except Exception as e:
-        logger.warning(f"Error reading groups file: {e}")
-        return None
+        logger.warning(f"Unexpected error reading groups file: {e}", exc_info=True)
+    return None
 
 
 def create_group(name: str) -> list[dict]:
@@ -153,15 +166,17 @@ def create_group(name: str) -> list[dict]:
         
         out = pl.concat([df, new_row], how="diagonal_relaxed")
         out.write_parquet(p)
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error creating group: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("创建板块时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error creating group: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("创建板块时出错，请重试")
     except Exception as e:
-        logger.error(f"Error creating group: {e}")
-        # 如果文件损坏，尝试重新创建
-        if p.exists():
-            try:
-                p.unlink()
-                logger.info("Removed corrupted groups file")
-            except:
-                pass
+        logger.error(f"Unexpected error creating group: {e}", exc_info=True)
+        _handle_corrupted_file(p)
         raise ValueError("创建板块时出错，请重试")
     
     return list_groups()
@@ -182,43 +197,67 @@ def rename_group(group_id: str, new_name: str) -> list[dict]:
     
     # 校验名称唯一性（排除自己）
     p = _groups_path()
-    df = pl.read_parquet(p)
-    others = df.filter(pl.col("group_id") != group_id)
-    if new_name in others["name"].to_list():
-        raise ValueError("板块名称已存在")
-    
-    df = df.with_columns(
-        pl.when(pl.col("group_id") == group_id)
-        .then(pl.lit(new_name))
-        .otherwise(pl.col("name"))
-        .alias("name")
-    )
-    
-    df.write_parquet(p)
-    return list_groups()
+    try:
+        df = pl.read_parquet(p)
+        others = df.filter(pl.col("group_id") != group_id)
+        if new_name in others["name"].to_list():
+            raise ValueError("板块名称已存在")
+        
+        df = df.with_columns(
+            pl.when(pl.col("group_id") == group_id)
+            .then(pl.lit(new_name))
+            .otherwise(pl.col("name"))
+            .alias("name")
+        )
+        
+        df.write_parquet(p)
+        return list_groups()
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error renaming group: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("重命名板块时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error renaming group: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("重命名板块时出错，请重试")
+    except Exception as e:
+        logger.error(f"Unexpected error renaming group: {e}", exc_info=True)
+        _handle_corrupted_file(p)
+        raise ValueError("重命名板块时出错，请重试")
 
 
 def delete_group(group_id: str) -> list[dict]:
     """删除板块并级联删除关联股票。"""
     group_id = group_id.strip()
     
-    # 删除板块元数据
-    p_groups = _groups_path()
-    if p_groups.exists():
-        df_groups = pl.read_parquet(p_groups)
-        df_groups = df_groups.filter(pl.col("group_id") != group_id)
-        df_groups.write_parquet(p_groups)
-    else:
-        df_groups = pl.DataFrame()
-    
-    # 级联删除关联股票
-    p_items = _items_path()
-    if p_items.exists():
-        df_items = pl.read_parquet(p_items)
-        df_items = df_items.filter(pl.col("group_id") != group_id)
-        df_items.write_parquet(p_items)
-    
-    return list_groups()
+    try:
+        # 删除板块元数据
+        p_groups = _groups_path()
+        if p_groups.exists():
+            df_groups = pl.read_parquet(p_groups)
+            df_groups = df_groups.filter(pl.col("group_id") != group_id)
+            df_groups.write_parquet(p_groups)
+        
+        # 级联删除关联股票
+        p_items = _items_path()
+        if p_items.exists():
+            df_items = pl.read_parquet(p_items)
+            df_items = df_items.filter(pl.col("group_id") != group_id)
+            df_items.write_parquet(p_items)
+        
+        return list_groups()
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error deleting group: {e}")
+        _handle_corrupted_file(p_groups if p_groups.exists() else p_items)
+        raise ValueError("删除板块时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error deleting group: {e}")
+        _handle_corrupted_file(p_groups if p_groups.exists() else p_items)
+        raise ValueError("删除板块时出错，请重试")
+    except Exception as e:
+        logger.error(f"Unexpected error deleting group: {e}", exc_info=True)
+        _handle_corrupted_file(p_groups if p_groups.exists() else p_items)
+        raise ValueError("删除板块时出错，请重试")
 
 
 def reorder_groups(group_ids: list[str]) -> list[dict]:
@@ -229,21 +268,34 @@ def reorder_groups(group_ids: list[str]) -> list[dict]:
     if not p.exists():
         return []
     
-    df = pl.read_parquet(p)
-    
-    # 构建 order map
-    order_map = {gid: i for i, gid in enumerate(group_ids)}
-    max_order_in = len(group_ids)
-    
-    df = df.with_columns(
-        pl.when(pl.col("group_id").is_in(group_ids))
-        .then(pl.col("group_id").map_elements(lambda x: order_map[x], return_dtype=pl.Int64))
-        .otherwise(pl.col("order") + max_order_in)
-        .alias("order")
-    )
-    
-    df.write_parquet(p)
-    return list_groups()
+    try:
+        df = pl.read_parquet(p)
+        
+        # 构建 order map
+        order_map = {gid: i for i, gid in enumerate(group_ids)}
+        max_order_in = len(group_ids)
+        
+        df = df.with_columns(
+            pl.when(pl.col("group_id").is_in(group_ids))
+            .then(pl.col("group_id").map_elements(lambda x: order_map[x], return_dtype=pl.Int64))
+            .otherwise(pl.col("order") + max_order_in)
+            .alias("order")
+        )
+        
+        df.write_parquet(p)
+        return list_groups()
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error reordering groups: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("排序板块时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error reordering groups: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("排序板块时出错，请重试")
+    except Exception as e:
+        logger.error(f"Unexpected error reordering groups: {e}", exc_info=True)
+        _handle_corrupted_file(p)
+        raise ValueError("排序板块时出错，请重试")
 
 
 def get_groups_with_stats() -> list[dict]:
@@ -260,8 +312,12 @@ def get_groups_with_stats() -> list[dict]:
             if not df_items.is_empty() and "group_id" in df_items.columns and "symbol" in df_items.columns:
                 item_counts = df_items.group_by("group_id").agg(pl.col("symbol").count().alias("item_count"))
                 counts_dict = {row["group_id"]: row["item_count"] for row in item_counts.to_dicts()}
+        except pl.exceptions.PolarsError as e:
+            logger.warning(f"Parquet parsing error for items file: {e}")
+        except OSError as e:
+            logger.warning(f"OS error reading items file: {e}")
         except Exception as e:
-            logger.warning(f"Error reading items file for stats: {e}")
+            logger.warning(f"Unexpected error reading items file: {e}", exc_info=True)
     
     result = []
     for g in groups:
@@ -287,24 +343,19 @@ def list_group_items(group_id: str) -> list[dict]:
         for col in required_cols:
             if col not in df.columns:
                 logger.warning(f"Missing required column '{col}' in items file, will recreate")
-                # 删除损坏的文件
-                try:
-                    p.unlink()
-                    logger.info("Removed corrupted items file")
-                except:
-                    pass
+                _handle_corrupted_file(p)
                 return []
         filtered = df.filter(pl.col("group_id") == group_id)
         return filtered.sort("order").to_dicts()
+    except pl.exceptions.PolarsError as e:
+        logger.warning(f"Parquet parsing error for items file: {e}, will try to remove corrupted file")
+    except OSError as e:
+        logger.warning(f"OS error reading items file: {e}, will try to remove corrupted file")
     except Exception as e:
-        logger.warning(f"Error reading items file: {e}, will try to remove corrupted file")
-        # 尝试删除损坏的文件
-        try:
-            p.unlink()
-            logger.info("Removed corrupted items file")
-        except:
-            pass
-        return []
+        logger.warning(f"Unexpected error reading items file: {e}", exc_info=True)
+    
+    _handle_corrupted_file(p)
+    return []
 
 
 def add_item(group_id: str, symbol: str, note: str = "") -> list[dict]:
@@ -365,15 +416,17 @@ def add_item(group_id: str, symbol: str, note: str = "") -> list[dict]:
         
         out = pl.concat([df, new_row], how="diagonal_relaxed")
         out.write_parquet(p)
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error adding item: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("添加股票时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error adding item: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("添加股票时出错，请重试")
     except Exception as e:
-        logger.error(f"Error adding item: {e}")
-        # 如果文件损坏，尝试重新创建
-        if p.exists():
-            try:
-                p.unlink()
-                logger.info("Removed corrupted items file")
-            except:
-                pass
+        logger.error(f"Unexpected error adding item: {e}", exc_info=True)
+        _handle_corrupted_file(p)
         raise ValueError("添加股票时出错，请重试")
     
     return list_group_items(group_id)
@@ -399,47 +452,60 @@ def add_items_batch(group_id: str, symbols: list[str], note: str = "") -> tuple[
         return [], 0
     
     p = _items_path()
-    if p.exists():
-        df = pl.read_parquet(p)
-        current_group_items = df.filter(pl.col("group_id") == group_id)
-        existing_symbols = set(current_group_items["symbol"].to_list())
-        # 过滤已存在的
-        to_add = [s for s in cleaned_symbols if s not in existing_symbols]
-        # 移除可能已存在的（为了统一处理）
-        df = df.filter(~((pl.col("group_id") == group_id) & (pl.col("symbol").is_in(cleaned_symbols))))
-    else:
-        df = pl.DataFrame(schema={
-            "group_id": pl.Utf8,
-            "symbol": pl.Utf8,
-            "order": pl.Int64,
-            "added_at": pl.Utf8,
-            "note": pl.Utf8
-        })
-        to_add = cleaned_symbols
-    
-    added_count = len(to_add)
-    if added_count > 0:
-        current_items = df.filter(pl.col("group_id") == group_id)
-        if current_items.is_empty():
-            base_order = 1
+    try:
+        if p.exists():
+            df = pl.read_parquet(p)
+            current_group_items = df.filter(pl.col("group_id") == group_id)
+            existing_symbols = set(current_group_items["symbol"].to_list())
+            # 过滤已存在的
+            to_add = [s for s in cleaned_symbols if s not in existing_symbols]
+            # 移除可能已存在的（为了统一处理）
+            df = df.filter(~((pl.col("group_id") == group_id) & (pl.col("symbol").is_in(cleaned_symbols))))
         else:
-            base_order = current_items["order"].max() + 1
-        
-        new_rows = []
-        for i, sym in enumerate(to_add):
-            new_rows.append({
-                "group_id": group_id,
-                "symbol": sym,
-                "order": base_order + i,
-                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
-                "note": note
+            df = pl.DataFrame(schema={
+                "group_id": pl.Utf8,
+                "symbol": pl.Utf8,
+                "order": pl.Int64,
+                "added_at": pl.Utf8,
+                "note": pl.Utf8
             })
+            to_add = cleaned_symbols
         
-        df_new = pl.DataFrame(new_rows)
-        df = pl.concat([df, df_new], how="diagonal_relaxed")
-        df.write_parquet(p)
-    
-    return list_group_items(group_id), added_count
+        added_count = len(to_add)
+        if added_count > 0:
+            current_items = df.filter(pl.col("group_id") == group_id)
+            if current_items.is_empty():
+                base_order = 1
+            else:
+                base_order = current_items["order"].max() + 1
+            
+            new_rows = []
+            for i, sym in enumerate(to_add):
+                new_rows.append({
+                    "group_id": group_id,
+                    "symbol": sym,
+                    "order": base_order + i,
+                    "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                    "note": note
+                })
+            
+            df_new = pl.DataFrame(new_rows)
+            df = pl.concat([df, df_new], how="diagonal_relaxed")
+            df.write_parquet(p)
+        
+        return list_group_items(group_id), added_count
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error adding items batch: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("批量添加股票时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error adding items batch: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("批量添加股票时出错，请重试")
+    except Exception as e:
+        logger.error(f"Unexpected error adding items batch: {e}", exc_info=True)
+        _handle_corrupted_file(p)
+        raise ValueError("批量添加股票时出错，请重试")
 
 
 def remove_item(group_id: str, symbol: str) -> list[dict]:
@@ -450,10 +516,23 @@ def remove_item(group_id: str, symbol: str) -> list[dict]:
     p = _items_path()
     if not p.exists():
         return []
-    df = pl.read_parquet(p)
-    df = df.filter(~((pl.col("group_id") == group_id) & (pl.col("symbol") == symbol)))
-    df.write_parquet(p)
-    return list_group_items(group_id)
+    try:
+        df = pl.read_parquet(p)
+        df = df.filter(~((pl.col("group_id") == group_id) & (pl.col("symbol") == symbol)))
+        df.write_parquet(p)
+        return list_group_items(group_id)
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error removing item: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("移除股票时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error removing item: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("移除股票时出错，请重试")
+    except Exception as e:
+        logger.error(f"Unexpected error removing item: {e}", exc_info=True)
+        _handle_corrupted_file(p)
+        raise ValueError("移除股票时出错，请重试")
 
 
 def reorder_items(group_id: str, symbols: list[str]) -> list[dict]:
@@ -464,27 +543,40 @@ def reorder_items(group_id: str, symbols: list[str]) -> list[dict]:
     p = _items_path()
     if not p.exists():
         return []
-    df = pl.read_parquet(p)
-    
-    # 分开处理该板块和其他板块
-    this_group = df.filter(pl.col("group_id") == group_id)
-    other_groups = df.filter(pl.col("group_id") != group_id)
-    
-    # 构建 order map
-    order_map = {sym: i for i, sym in enumerate(symbols)}
-    
-    # 更新该板块的 order
-    this_group = this_group.with_columns(
-        pl.when(pl.col("symbol").is_in(symbols))
-        .then(pl.col("symbol").map_elements(lambda x: order_map[x], return_dtype=pl.Int64))
-        .otherwise(pl.col("order") + len(symbols))
-        .alias("order")
-    )
-    
-    # 合并回去
-    out = pl.concat([other_groups, this_group], how="diagonal_relaxed")
-    out.write_parquet(p)
-    return list_group_items(group_id)
+    try:
+        df = pl.read_parquet(p)
+        
+        # 分开处理该板块和其他板块
+        this_group = df.filter(pl.col("group_id") == group_id)
+        other_groups = df.filter(pl.col("group_id") != group_id)
+        
+        # 构建 order map
+        order_map = {sym: i for i, sym in enumerate(symbols)}
+        
+        # 更新该板块的 order
+        this_group = this_group.with_columns(
+            pl.when(pl.col("symbol").is_in(symbols))
+            .then(pl.col("symbol").map_elements(lambda x: order_map[x], return_dtype=pl.Int64))
+            .otherwise(pl.col("order") + len(symbols))
+            .alias("order")
+        )
+        
+        # 合并回去
+        out = pl.concat([other_groups, this_group], how="diagonal_relaxed")
+        out.write_parquet(p)
+        return list_group_items(group_id)
+    except pl.exceptions.PolarsError as e:
+        logger.error(f"Parquet error reordering items: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("排序股票时出错，请重试")
+    except OSError as e:
+        logger.error(f"OS error reordering items: {e}")
+        _handle_corrupted_file(p)
+        raise ValueError("排序股票时出错，请重试")
+    except Exception as e:
+        logger.error(f"Unexpected error reordering items: {e}", exc_info=True)
+        _handle_corrupted_file(p)
+        raise ValueError("排序股票时出错，请重试")
 
 
 def get_all_watchlist_symbols() -> list[str]:
@@ -492,7 +584,15 @@ def get_all_watchlist_symbols() -> list[str]:
     p = _items_path()
     if not p.exists():
         return []
-    df = pl.read_parquet(p)
-    if df.is_empty():
-        return []
-    return list(set(df["symbol"].to_list()))
+    try:
+        df = pl.read_parquet(p)
+        if df.is_empty():
+            return []
+        return list(set(df["symbol"].to_list()))
+    except pl.exceptions.PolarsError as e:
+        logger.warning(f"Parquet error reading items file: {e}")
+    except OSError as e:
+        logger.warning(f"OS error reading items file: {e}")
+    except Exception as e:
+        logger.warning(f"Unexpected error reading items file: {e}", exc_info=True)
+    return []

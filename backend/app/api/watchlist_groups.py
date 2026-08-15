@@ -8,7 +8,7 @@ from datetime import date
 
 import polars as pl
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.db_safe import is_valid_ext_ident, quote_ident
 from app.services import watchlist_groups as watchlist_groups_service
@@ -20,41 +20,115 @@ router = APIRouter(prefix="/api/watchlist-groups", tags=["watchlist-groups"])
 
 
 class CreateGroupRequest(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=50, description="板块名称，长度1-50字符")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("板块名称不能为空")
+        if len(v) > 50:
+            raise ValueError("板块名称不能超过50字符")
+        return v
 
 
 class RenameGroupRequest(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=50, description="板块名称，长度1-50字符")
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("板块名称不能为空")
+        if len(v) > 50:
+            raise ValueError("板块名称不能超过50字符")
+        return v
 
 
 class ReorderGroupsRequest(BaseModel):
-    group_ids: list[str]
+    group_ids: list[str] = Field(..., min_length=1, description="板块ID列表，至少一个")
 
 
 class AddItemRequest(BaseModel):
-    symbol: str
-    note: str = ""
+    symbol: str = Field(..., min_length=1, max_length=20, description="股票代码")
+    note: str = Field(default="", max_length=200, description="备注，最多200字符")
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not v:
+            raise ValueError("股票代码不能为空")
+        if len(v) > 20:
+            raise ValueError("股票代码不能超过20字符")
+        return v
 
 
 class AddItemsBatchRequest(BaseModel):
-    symbols: list[str]
-    note: str = ""
+    symbols: list[str] = Field(..., min_length=1, max_length=100, description="股票代码列表，1-100个")
+    note: str = Field(default="", max_length=200, description="备注，最多200字符")
+
+    @field_validator("symbols")
+    @classmethod
+    def validate_symbols(cls, v: list[str]) -> list[str]:
+        cleaned = []
+        seen = set()
+        for s in v:
+            s = s.strip().upper()
+            if s and s not in seen:
+                if len(s) > 20:
+                    raise ValueError(f"股票代码 '{s}' 不能超过20字符")
+                cleaned.append(s)
+                seen.add(s)
+        if not cleaned:
+            raise ValueError("有效股票代码列表不能为空")
+        return cleaned
 
 
 class ReorderItemsRequest(BaseModel):
-    symbols: list[str]
+    symbols: list[str] = Field(..., min_length=1, description="股票代码列表，至少一个")
 
 
 class SetViewModeRequest(BaseModel):
-    mode: str
+    mode: str = Field(..., description="视图模式")
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        v = v.strip()
+        if v not in ["sidebar", "cards"]:
+            raise ValueError("视图模式必须是 'sidebar' 或 'cards'")
+        return v
 
 
 class SetDisplayStyleRequest(BaseModel):
-    style: str
+    style: str = Field(..., description="显示样式")
+
+    @field_validator("style")
+    @classmethod
+    def validate_style(cls, v: str) -> str:
+        v = v.strip()
+        if v not in ["compact", "standard", "detailed"]:
+            raise ValueError("显示样式必须是 'compact'、'standard' 或 'detailed'")
+        return v
 
 
 class SetAvgPctModeRequest(BaseModel):
-    mode: str
+    mode: str = Field(..., description="平均涨跌幅模式")
+
+    @field_validator("mode")
+    @classmethod
+    def validate_avg_mode(cls, v: str) -> str:
+        v = v.strip()
+        if v not in ["simple", "weighted"]:
+            raise ValueError("平均涨跌幅模式必须是 'simple' 或 'weighted'")
+        return v
+
+
+class UpdateColumnsRequest(BaseModel):
+    columns: list[dict] = Field(default_factory=list, description="列配置列表")
 
 
 def _with_names(rows: list[dict], request: Request) -> list[dict]:
