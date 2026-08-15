@@ -721,6 +721,7 @@ export function WatchlistGroups() {
       const currentGroupItems = selectedGroupItemsQuery.data?.rows || []
       const currentSymbols = currentGroupItems.map(r => r.symbol)
       const isFirst = currentSymbols[0] === row.symbol
+      const board = boardTag(row.symbol)
 
       return (
         <td key={col.id} className="px-1.5 py-1.5">
@@ -741,6 +742,11 @@ export function WatchlistGroups() {
                   {row.name}
                 </span>
               )}
+              {board ? (
+                <span className={`shrink-0 inline-flex items-center justify-center w-[18px] h-[18px] rounded text-[9px] font-bold leading-none border ${board.color}`}>
+                  {board.label}
+                </span>
+              ) : null}
             </button>
             {/* 删除入口：默认减号图标，二次确认时替换为确定按钮 */}
             <div className="ml-auto pl-1 shrink-0">
