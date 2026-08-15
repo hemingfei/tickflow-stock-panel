@@ -738,7 +738,7 @@ export function WatchlistGroups() {
                 {row.symbol}
               </span>
               {row.name && (
-                <span className="text-xs text-muted truncate group-hover:text-secondary transition-colors duration-150">
+                <span className="text-xs text-secondary truncate group-hover:text-foreground transition-colors duration-150">
                   {row.name}
                 </span>
               )}
