@@ -580,7 +580,6 @@ export function WatchlistGroups() {
   const queryClient = useQueryClient()
 
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
-  const [showGroupModal, setShowGroupModal] = useState(false)  // 明确控制是否显示板块详情 Modal
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -901,13 +900,6 @@ export function WatchlistGroups() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // 当视图模式变化时，清理相关状态
-  useEffect(() => {
-    if (sidebarOrCardsView === 'cards') {
-      // 切换到卡片视图时，隐藏 Modal
-      setShowGroupModal(false)
-    }
-  }, [sidebarOrCardsView])
 
   // 前端计算板块平均涨跌幅
   const calculateGroupAvgChange = useCallback((group: any, allGroupItems?: Record<string, any[]>) => {
@@ -1589,80 +1581,254 @@ export function WatchlistGroups() {
       </div>
 
       {/* 右侧内容 */}
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">自选板块</h1>
-            <div className="flex items-center gap-2">
-              {/* 视图切换按钮 */}
-              <button
-                type="button"
-                onClick={() => setCardsViewMode((cardsViewMode as string) === 'cards' ? 'list' : 'cards')}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-                title={(cardsViewMode as string) === 'cards' ? '切换到列表视图' : '切换到卡片视图'}
-              >
-                {(cardsViewMode as string) === 'cards' ? <List className="h-4 w-4" /> : <Grid className="h-4 w-4" />}
-              </button>
-            <button
-              type="button"
-              onClick={toggleStockSortMode}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-              title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
-            >
-              {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
-              {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
-              {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
-            </button>
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+        {/* 上半部分：板块列表 */}
+        <div className={`flex-shrink-0 overflow-y-auto ${selectedGroupId ? 'h-1/2' : 'h-full'} border-b border-border`}>
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h1 className="text-2xl font-bold">自选板块</h1>
+                <div className="flex items-center gap-2">
+                  {/* 视图切换按钮 */}
+                  <button
+                    type="button"
+                    onClick={() => setCardsViewMode((cardsViewMode as string) === 'cards' ? 'list' : 'cards')}
+                    className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                    title={(cardsViewMode as string) === 'cards' ? '切换到列表视图' : '切换到卡片视图'}
+                  >
+                    {(cardsViewMode as string) === 'cards' ? <List className="h-4 w-4" /> : <Grid className="h-4 w-4" />}
+                  </button>
+                <button
+                  type="button"
+                  onClick={toggleStockSortMode}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                  title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
+                >
+                  {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
+                  {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+                  {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            
+            {/* 根据视图模式渲染不同内容 */}
+            {(cardsViewMode as string) === 'cards' ? (
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+                {sortedGroups.map((group) => (
+                  <div 
+                    key={group.group_id}
+                    className={cn(
+                      'cursor-pointer transition-all duration-200',
+                      selectedGroupId === group.group_id ? 'ring-2 ring-accent rounded-lg' : ''
+                    )}
+                  >
+                    <GroupCard
+                      group={group}
+                      onSelect={(id) => { 
+                        setSelectedGroupId(id === selectedGroupId ? null : id); 
+                      }}
+                      avgPctMode={avgPctMode}
+                      items={allGroupItems?.[group.group_id]}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-8">
+                {sortedGroups.map((group) => {
+                  const rows = allGroupItems?.[group.group_id]
+                  const avgChange = rows ? calculateGroupAvgChange(group, { [group.group_id]: rows }) : { simple: null, weighted: null }
+                  const displayChange = avgPctMode === 'simple' ? avgChange.simple : avgChange.weighted
+                  
+                  return (
+                    <div 
+                      key={group.group_id} 
+                      className={cn(
+                        'space-y-4 p-3 rounded-lg transition-all duration-200 cursor-pointer',
+                        selectedGroupId === group.group_id ? 'bg-elevated/50' : 'hover:bg-elevated/20'
+                      )}
+                      onClick={() => setSelectedGroupId(group.group_id === selectedGroupId ? null : group.group_id)}
+                    >
+                      {/* 板块标题栏 */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <h2 className="text-lg font-semibold">{group.name}</h2>
+                          {displayChange != null && (
+                            <span className={cn('text-sm font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
+                          )}
+                          <span className="text-sm text-muted">{group.item_count} 只</span>
+                        </div>
+                      </div>
+                      
+                      {/* 股票卡片网格 */}
+                      {rows && rows.length > 0 ? (
+                        <div className={`grid gap-3 ${
+                          cardColumns === 6 ? '2xl:grid-cols-6' :
+                          cardColumns === 5 ? 'xl:grid-cols-5' :
+                          cardColumns === 4 ? 'md:grid-cols-4' :
+                          cardColumns === 3 ? 'sm:grid-cols-3' :
+                          'grid-cols-2'
+                        }`}>
+                          {rows.map((row) => (
+                            <StockCard
+                              key={row.symbol}
+                              r={row}
+                              onPreview={handleCardPreview}
+                              onConfirmRemove={(sym) => {
+                                if (selectedGroupId) {
+                                  removeItemMutation.mutate({ groupId: group.group_id, symbol: sym })
+                                }
+                                setConfirmRemove(null)
+                              }}
+                              onCancelRemove={() => setConfirmRemove(null)}
+                              onRequestRemove={(sym) => {
+                                setSelectedGroupId(group.group_id)
+                                setConfirmRemove(sym)
+                              }}
+                              isConfirming={confirmRemove === row.symbol && selectedGroupId === group.group_id}
+                              hideSymbol={true}
+                              swapPriceAndPct={true}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-muted py-4">该板块暂无股票</div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </div>
-        
-        {/* 根据视图模式渲染不同内容 */}
-        {(cardsViewMode as string) === 'cards' ? (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
-            {sortedGroups.map((group) => (
-              <GroupCard
-                key={group.group_id}
-                group={group}
-                onSelect={(id) => { 
-                  setSelectedGroupId(id); 
-                  setShowGroupModal(true); 
-                }}
-                avgPctMode={avgPctMode}
-                items={allGroupItems?.[group.group_id]}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className="space-y-8">
-            {sortedGroups.map((group) => {
-              const rows = allGroupItems?.[group.group_id]
-              const avgChange = rows ? calculateGroupAvgChange(group, { [group.group_id]: rows }) : { simple: null, weighted: null }
-              const displayChange = avgPctMode === 'simple' ? avgChange.simple : avgChange.weighted
-              
-              return (
-                <div key={group.group_id} className="space-y-4">
-                  {/* 板块标题栏 */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-lg font-semibold">{group.name}</h2>
-                      {displayChange != null && (
-                        <span className={cn('text-sm font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
-                      )}
-                      <span className="text-sm text-muted">{group.item_count} 只</span>
+
+        {/* 下半部分：板块详情（当选择板块时显示） */}
+        {selectedGroupId && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0 bg-elevated/30">
+              <h2 className="text-lg font-semibold">{groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)?.name}</h2>
+              <div className="flex items-center gap-2">
+                <StockSearchBox
+                  onPreview={(sym, name) => { setPreviewSymbol(sym); setPreviewName(name) }}
+                  existingSymbols={selectedGroupItemsQuery.data?.rows?.map(r => r.symbol) ?? []}
+                  onAdd={(sym) => addItemMutation.mutate({ groupId: selectedGroupId, symbol: sym })}
+                />
+                <button
+                  type="button"
+                  onClick={() => setSelectedGroupId(null)}
+                  className="h-8 w-8 inline-flex items-center justify-center rounded-btn text-secondary hover:bg-elevated"
+                  title="关闭详情"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {selectedGroupItemsQuery.isLoading ? (
+                <EmptyState title="加载中…" />
+              ) : selectedGroupItemsQuery.data?.rows && selectedGroupItemsQuery.data.rows.length > 0 ? (
+                <div className="flex flex-col">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      {/* 视图切换按钮 */}
+                      <button
+                        onClick={toggleView}
+                        className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                        title={viewMode === 'table' ? '卡片视图' : '列表视图'}
+                      >
+                        {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
+                      </button>
+                      <div className="w-px h-5 bg-border" />
+                      {/* 自定义列按钮 */}
+                      <button
+                        onClick={() => setCustomizerOpen(true)}
+                        className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                        title="自定义列"
+                      >
+                        <Settings2 className="h-4 w-4" />
+                      </button>
+                      {/* 刷新按钮 */}
+                      <button
+                        onClick={() => selectedGroupItemsQuery.refetch()}
+                        disabled={selectedGroupItemsQuery.isFetching}
+                        className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
+                        title="刷新"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${selectedGroupItemsQuery.isFetching ? 'animate-spin' : ''}`} />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedGroupId(group.group_id)
-                        setShowGroupModal(true)
-                      }}
-                      className="text-sm text-accent hover:underline"
-                    >
-                      查看详情
-                    </button>
                   </div>
-                  
-                  {/* 股票卡片网格 */}
-                  {rows && rows.length > 0 ? (
+                  {viewMode === 'table' ? (
+                    <StockDataTable
+                      columns={visibleColumns}
+                      rows={sortRows(selectedGroupItemsQuery.data.rows, visibleColumns)}
+                      renderCell={renderCell}
+                      headerSticky={true}
+                      rowKey={(row) => row.symbol}
+                      sort={sort}
+                      onSortToggle={handleSortToggle}
+                      renderHeaderContent={(col) => {
+                        if (col.source.type === 'builtin' && col.source.key === 'candle') {
+                          return (
+                            <span className="inline-flex items-center justify-center gap-1.5">
+                              <span>{col.label}</span>
+                              <button
+                                type="button"
+                                onClick={(event) => { event.stopPropagation(); toggleDailyKChart() }}
+                                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                                  dailyKChartVisible
+                                    ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                    : 'text-muted hover:text-foreground hover:bg-elevated'
+                                }`}
+                                title={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
+                                aria-label={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
+                              >
+                                {dailyKChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                              </button>
+                            </span>
+                          );
+                        }
+                        if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+                          const intradayAutoRefresh = (prefsData?.minute_intraday_refresh ?? false) && realtimeRunning;
+                          return (
+                            <span className="inline-flex items-center justify-center gap-1.5">
+                              <span>{col.label}</span>
+                              <button
+                                type="button"
+                                onClick={(event) => { event.stopPropagation(); toggleIntradayChart() }}
+                                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                                  intradayChartVisible
+                                    ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                    : 'text-muted hover:text-foreground hover:bg-elevated'
+                                }`}
+                                title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                                aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                              >
+                                {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                              </button>
+                              {/* 分时图显示 且 未开自动轮询时，提供手动刷新按钮 */}
+                              {intradayChartVisible && !intradayAutoRefresh && (
+                                <button
+                                  type="button"
+                                  onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
+                                  disabled={minuteBatch.isFetching}
+                                  className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                                  title="刷新分时数据"
+                                  aria-label="刷新分时数据"
+                                >
+                                  <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
+                                </button>
+                              )}
+                              {/* 自动轮询中：显示旋转图标提示正在实时刷新 */}
+                              {intradayChartVisible && intradayAutoRefresh && (
+                                <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+                              )}
+                            </span>
+                          );
+                        }
+                        return undefined;
+                      }}
+                    />
+                  ) : (
                     <div className={`grid gap-3 ${
                       cardColumns === 6 ? '2xl:grid-cols-6' :
                       cardColumns === 5 ? 'xl:grid-cols-5' :
@@ -1670,77 +1836,27 @@ export function WatchlistGroups() {
                       cardColumns === 3 ? 'sm:grid-cols-3' :
                       'grid-cols-2'
                     }`}>
-                      {rows.map((row) => (
+                      {selectedGroupItemsQuery.data.rows.map((row) => (
                         <StockCard
                           key={row.symbol}
                           r={row}
                           onPreview={handleCardPreview}
-                          onConfirmRemove={(sym) => {
-                            if (selectedGroupId) {
-                              removeItemMutation.mutate({ groupId: group.group_id, symbol: sym })
-                            }
-                            setConfirmRemove(null)
-                          }}
-                          onCancelRemove={() => setConfirmRemove(null)}
-                          onRequestRemove={(sym) => {
-                            setSelectedGroupId(group.group_id)
-                            setConfirmRemove(sym)
-                          }}
-                          isConfirming={confirmRemove === row.symbol && selectedGroupId === group.group_id}
-                          hideSymbol={true}
-                          swapPriceAndPct={true}
+                          onConfirmRemove={handleCardConfirmRemove}
+                          onCancelRemove={handleCardCancelRemove}
+                          onRequestRemove={handleCardRequestRemove}
+                          isConfirming={confirmRemove === row.symbol}
                         />
                       ))}
                     </div>
-                  ) : (
-                    <div className="text-sm text-muted py-4">该板块暂无股票</div>
                   )}
                 </div>
-              )
-            })}
+              ) : (
+                <EmptyState title="该板块暂无股票" />
+              )}
+            </div>
           </div>
         )}
       </div>
-
-      {showGroupModal && selectedGroupId && (
-        <Modal
-          onClose={() => {
-            setShowGroupModal(false);
-            setSelectedGroupId(null);
-          }}
-          panelClassName="w-[90vw] max-w-5xl max-h-[80vh] flex flex-col bg-surface border border-border rounded-lg shadow-xl"
-        >
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-            <h2 className="text-lg font-semibold">{groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)?.name}</h2>
-            <button
-              type="button"
-              onClick={() => {
-                setShowGroupModal(false);
-                setSelectedGroupId(null);
-              }}
-              className="h-8 w-8 inline-flex items-center justify-center rounded-btn text-secondary hover:bg-elevated"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="p-4 overflow-y-auto flex-1">
-            {selectedGroupItemsQuery.isLoading ? (
-              <EmptyState title="加载中…" />
-            ) : selectedGroupItemsQuery.data?.rows && selectedGroupItemsQuery.data.rows.length > 0 ? (
-              <StockDataTable
-                columns={BUILTIN_COLUMNS}
-                rows={sortRows(selectedGroupItemsQuery.data.rows, BUILTIN_COLUMNS)}
-                renderCell={renderCell}
-                rowKey={(row) => row.symbol}
-                sort={sort}
-                onSortToggle={handleSortToggle}
-              />
-            ) : (
-              <EmptyState title="该板块暂无股票" />
-            )}
-          </div>
-        </Modal>
-      )}
     </div>
   )
 
