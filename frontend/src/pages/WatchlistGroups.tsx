@@ -200,6 +200,8 @@ const StockCard = React.memo(function StockCard({
   onCancelRemove,
   onRequestRemove,
   isConfirming,
+  hideSymbol = false,
+  swapPriceAndPct = false,
 }: {
   r: any
   onPreview: (symbol: string, name: string) => void
@@ -207,6 +209,8 @@ const StockCard = React.memo(function StockCard({
   onCancelRemove: () => void
   onRequestRemove: (symbol: string) => void
   isConfirming: boolean
+  hideSymbol?: boolean
+  swapPriceAndPct?: boolean
 }) {
   const board = boardTag(r.symbol)
   const price = r.rt_price ?? r.close
@@ -264,9 +268,11 @@ const StockCard = React.memo(function StockCard({
       <div className="pl-4 pr-2.5 pt-2.5 pb-0">
         {/* 第一行: 代码 + 名称 + 板块标识 */}
         <div className="flex items-center gap-1.5 min-w-0 mb-2">
-          <span className="shrink-0 font-mono text-foreground text-xs tracking-wide">
-            {r.symbol}
-          </span>
+          {!hideSymbol && (
+            <span className="shrink-0 font-mono text-foreground text-xs tracking-wide">
+              {r.symbol}
+            </span>
+          )}
           {name && (
             <span className="text-xs text-secondary truncate">{name}</span>
           )}
@@ -282,15 +288,30 @@ const StockCard = React.memo(function StockCard({
           )}
         </div>
 
-        {/* 第二行: 大价格 + 涨跌幅胶囊 */}
+        {/* 第二行: 价格和涨跌幅 */}
         <div className="flex items-end justify-between gap-2 mb-2">
-          <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
-            {fmtPrice(price)}
-          </span>
-          {pct != null && (
-            <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
-              {isUp ? '+' : ''}{pct.toFixed(2)}%
-            </span>
+          {swapPriceAndPct ? (
+            <>
+              {pct != null && (
+                <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
+                  {isUp ? '+' : ''}{pct.toFixed(2)}%
+                </span>
+              )}
+              <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
+                {fmtPrice(price)}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className={`text-xl tabular-nums tracking-tighter leading-none ${priceColorClass(pct)}`}>
+                {fmtPrice(price)}
+              </span>
+              {pct != null && (
+                <span className={`shrink-0 inline-flex items-center px-1.5 py-[2px] rounded text-[11px] tabular-nums ${pctBg}`}>
+                  {isUp ? '+' : ''}{pct.toFixed(2)}%
+                </span>
+              )}
+            </>
           )}
         </div>
 
@@ -645,6 +666,9 @@ export function WatchlistGroups() {
   // 从设置中获取或使用默认值（仅保留侧边栏/卡片视图和平均涨跌幅模式）
   const sidebarOrCardsView = (settingsQuery.data?.view_mode as 'sidebar' | 'cards') || 'sidebar'
   const avgPctMode = (settingsQuery.data?.avg_pct_mode as 'simple' | 'weighted') || 'simple'
+  
+  // 卡片页内部的视图模式：cards（卡片网格）或 list（列表视图）
+  const [cardsViewMode, setCardsViewMode] = useState<string>('cards')
 
   // 所有的 mutations 定义在前面
   const setSidebarOrCardsViewMutation = useMutation({
@@ -1564,11 +1588,20 @@ export function WatchlistGroups() {
         </div>
       </div>
 
-      {/* 右侧内容 - 板块卡片网格 */}
+      {/* 右侧内容 */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold">自选板块</h1>
-          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              {/* 视图切换按钮 */}
+              <button
+                type="button"
+                onClick={() => setCardsViewMode((cardsViewMode as string) === 'cards' ? 'list' : 'cards')}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                title={(cardsViewMode as string) === 'cards' ? '切换到列表视图' : '切换到卡片视图'}
+              >
+                {(cardsViewMode as string) === 'cards' ? <List className="h-4 w-4" /> : <Grid className="h-4 w-4" />}
+              </button>
             <button
               type="button"
               onClick={toggleStockSortMode}
@@ -1581,20 +1614,92 @@ export function WatchlistGroups() {
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
-          {sortedGroups.map((group) => (
-            <GroupCard
-              key={group.group_id}
-              group={group}
-              onSelect={(id) => { 
-                setSelectedGroupId(id); 
-                setShowGroupModal(true); 
-              }}
-              avgPctMode={avgPctMode}
-              items={allGroupItems?.[group.group_id]}
-            />
-          ))}
-        </div>
+        
+        {/* 根据视图模式渲染不同内容 */}
+        {(cardsViewMode as string) === 'cards' ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+            {sortedGroups.map((group) => (
+              <GroupCard
+                key={group.group_id}
+                group={group}
+                onSelect={(id) => { 
+                  setSelectedGroupId(id); 
+                  setShowGroupModal(true); 
+                }}
+                avgPctMode={avgPctMode}
+                items={allGroupItems?.[group.group_id]}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {sortedGroups.map((group) => {
+              const rows = allGroupItems?.[group.group_id]
+              const avgChange = rows ? calculateGroupAvgChange(group, { [group.group_id]: rows }) : { simple: null, weighted: null }
+              const displayChange = avgPctMode === 'simple' ? avgChange.simple : avgChange.weighted
+              
+              return (
+                <div key={group.group_id} className="space-y-4">
+                  {/* 板块标题栏 */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-lg font-semibold">{group.name}</h2>
+                      {displayChange != null && (
+                        <span className={cn('text-sm font-medium', displayChange >= 0 ? 'text-bull' : 'text-bear')}>{fmtPct(displayChange)}</span>
+                      )}
+                      <span className="text-sm text-muted">{group.item_count} 只</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedGroupId(group.group_id)
+                        setShowGroupModal(true)
+                      }}
+                      className="text-sm text-accent hover:underline"
+                    >
+                      查看详情
+                    </button>
+                  </div>
+                  
+                  {/* 股票卡片网格 */}
+                  {rows && rows.length > 0 ? (
+                    <div className={`grid gap-3 ${
+                      cardColumns === 6 ? '2xl:grid-cols-6' :
+                      cardColumns === 5 ? 'xl:grid-cols-5' :
+                      cardColumns === 4 ? 'md:grid-cols-4' :
+                      cardColumns === 3 ? 'sm:grid-cols-3' :
+                      'grid-cols-2'
+                    }`}>
+                      {rows.map((row) => (
+                        <StockCard
+                          key={row.symbol}
+                          r={row}
+                          onPreview={handleCardPreview}
+                          onConfirmRemove={(sym) => {
+                            if (selectedGroupId) {
+                              removeItemMutation.mutate({ groupId: group.group_id, symbol: sym })
+                            }
+                            setConfirmRemove(null)
+                          }}
+                          onCancelRemove={() => setConfirmRemove(null)}
+                          onRequestRemove={(sym) => {
+                            setSelectedGroupId(group.group_id)
+                            setConfirmRemove(sym)
+                          }}
+                          isConfirming={confirmRemove === row.symbol && selectedGroupId === group.group_id}
+                          hideSymbol={true}
+                          swapPriceAndPct={true}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-muted py-4">该板块暂无股票</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {showGroupModal && selectedGroupId && (
