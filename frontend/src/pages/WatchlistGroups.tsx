@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Plus, List, Grid, Trash2, Edit2, X, Search, Check, Settings, LayoutGrid, RefreshCw, Settings2, Minus, ChevronsUp, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
+import { Plus, List, Grid, Trash2, Edit2, X, Search, Check, Settings, LayoutGrid, RefreshCw, Settings2, Minus, ChevronsUp, ArrowUpDown, ArrowUp, ArrowDown, Eye, EyeOff } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { toast } from '@/components/Toast'
 import { Modal } from '@/components/Modal'
@@ -8,12 +8,21 @@ import { EmptyState } from '@/components/EmptyState'
 import { StockDataTable } from '@/components/stock-table/StockDataTable'
 import { useTableSort } from '@/components/stock-table/useTableSort'
 import { renderBuiltinDataCell, boardTag } from '@/components/stock-table/primitives'
-import { fmtPrice, fmtPct, priceColorClass } from '@/lib/format'
+import { MiniCandlestick } from '@/components/stock-table/MiniCandlestick'
+import { MiniIntraday } from '@/components/stock-table/MiniIntraday'
+import { fmtPrice, fmtPct, fmtBigNum, priceColorClass, formatExtNumber } from '@/lib/format'
 import { QK } from '@/lib/queryKeys'
-import { BUILTIN_COLUMNS, type ColumnConfig, loadColumnConfig, saveColumnConfig } from '@/lib/watchlist-groups-columns'
+import { BUILTIN_COLUMNS, type ColumnConfig, loadColumnConfig, saveColumnConfig, buildExtColumnsParam } from '@/lib/watchlist-groups-columns'
+import { resolveCandleConfig, resolveIntradayConfig } from '@/lib/list-columns'
+import {
+  DimensionMembersDialog,
+  dimensionKindForSourceField,
+  type DimensionMembersTarget,
+} from '@/components/DimensionMembersDialog'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { storage } from '@/lib/storage'
-import { api, type WatchlistGroup } from '@/lib/api'
+import { api, type WatchlistGroup, type MinuteKlineRow } from '@/lib/api'
+import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { getSignals, signalCls } from '@/lib/stock-table'
 import { cn } from '@/lib/cn'
@@ -407,6 +416,145 @@ function GroupCard({
   )
 }
 
+/** 渲染扩展数据列的值（含分隔/标签/展开配置） */
+function renderExtValue(
+  val: any,
+  col: ColumnConfig,
+  expanded: boolean,
+  onToggle: () => void,
+  inline?: boolean,
+  onTagClick?: (tag: string) => void,
+): React.ReactNode {
+  if (val == null || Number.isNaN(val)) return <span className="text-muted">—</span>
+  if (typeof val === 'number') {
+    // 数字格式化: 千分位 + 单位换算 + 小数位(由列配置控制)
+    const cfg = col.extDisplay
+    const hasNumFmt = cfg?.thousandSeparator || (cfg?.unitConvert && cfg.unitConvert !== 'none')
+    const displayVal = hasNumFmt
+      ? formatExtNumber(val, { thousandSeparator: cfg?.thousandSeparator, unitConvert: cfg?.unitConvert, unitDecimals: cfg?.unitDecimals })
+      : (Number.isInteger(val) ? fmtPrice(val, 0) : fmtPrice(val))
+    return <span className="tabular-nums">{displayVal}</span>
+  }
+  if (typeof val === 'boolean') {
+    return <span className={val ? 'text-bull' : 'text-muted'}>{val ? '是' : '否'}</span>
+  }
+
+  // String — 按 extDisplay 配置渲染
+  const cfg = col.extDisplay
+  const str = String(val)
+
+  // 纯文本模式
+  if (cfg?.displayMode === 'text') {
+    return <span className="text-foreground">{str}</span>
+  }
+
+  // 标签模式（默认）
+  const separator = cfg?.separator?.trim() || null
+  const tags = separator
+    ? str.split(separator).map(s => s.trim()).filter(Boolean)
+    : str.split(/[、,，;；\-]/).map(s => s.trim()).filter(Boolean)
+
+  if (tags.length === 0) return <span className="text-muted">—</span>
+
+  const maxTags = cfg?.maxTags ?? 0
+  const showAll = maxTags <= 0 || expanded || tags.length <= maxTags
+  const sliced = showAll ? tags : tags.slice(0, maxTags)
+  const hiddenIndices = maxTags > 0 ? cfg?.hiddenIndices : undefined
+  const visibleTags = hiddenIndices?.length
+    ? sliced.filter((_, i) => !hiddenIndices.includes(i))
+    : sliced
+  const hiddenCount = tags.length - visibleTags.length
+
+  // 竖向排列：仅在表格视图、收起态、设定了显示上限时生效
+  const isVertical = !inline && cfg?.tagLayout === 'vertical' && !expanded
+
+  const tagEls = (
+    <>
+      {visibleTags.map((tag, i) => onTagClick ? (
+        <button
+          key={i}
+          type="button"
+          onClick={event => { event.stopPropagation(); onTagClick(tag) }}
+          className="inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight text-yellow-500 bg-yellow-500/10 hover:brightness-95"
+        >
+          {tag}
+        </button>
+      ) : (
+        <span key={i} className="inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight text-yellow-500 bg-yellow-500/10">
+          {tag}
+        </span>
+      ))}
+      {!showAll && hiddenCount > 0 && (
+        <button
+          onClick={onToggle}
+          className="inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight text-accent bg-accent/10 hover:bg-accent/20 transition-colors"
+        >
+          +{hiddenCount}
+        </button>
+      )}
+      {showAll && maxTags > 0 && tags.length > maxTags && (
+        <button
+          onClick={onToggle}
+          className="inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight text-muted hover:text-foreground transition-colors"
+        >
+          收起
+        </button>
+      )}
+    </>
+  )
+
+  if (inline) {
+    // 卡片视图：返回 inline 片段
+    return tagEls
+  }
+  // 表格视图：用 <div> 包裹
+  return <div className={isVertical ? 'flex flex-col items-start gap-0.5' : 'flex flex-wrap gap-0.5'}>{tagEls}</div>
+}
+
+/** 渲染扩展数据列的 <td> */
+function renderExtCell(
+  r: any,
+  col: ColumnConfig,
+  expandedCells: Set<string>,
+  onToggleExpand: (key: string) => void,
+  onDimensionClick: (target: DimensionMembersTarget) => void,
+): React.ReactNode {
+  if (col.source.type !== 'ext') return null
+  const { configId, fieldName } = col.source
+  const val = r[`${configId}__${fieldName}`]
+  const cellKey = `${r.symbol}::${col.id}`
+  const expanded = expandedCells.has(cellKey)
+  const sourceField = `${configId}.${fieldName}`
+  const dimensionKind = dimensionKindForSourceField(sourceField)
+
+  const style: React.CSSProperties = {}
+  if (col.extDisplay?.maxWidth) {
+    style.maxWidth = col.extDisplay.maxWidth
+  }
+
+  // 根据值类型决定 td class
+  const tdClass = val == null || Number.isNaN(val)
+    ? 'px-2 py-1.5 text-right num tabular-nums text-muted'
+    : typeof val === 'number'
+      ? 'px-2 py-1.5 text-right num tabular-nums'
+      : typeof val === 'boolean'
+        ? 'px-2 py-1.5 text-right'
+        : 'px-2 py-1.5'
+
+  return (
+    <td className={tdClass} style={style}>
+      {renderExtValue(
+        val,
+        col,
+        expanded,
+        () => onToggleExpand(cellKey),
+        false,
+        dimensionKind ? value => onDimensionClick({ kind: dimensionKind, value, sourceField }) : undefined,
+      )}
+    </td>
+  )
+}
+
 export function WatchlistGroups() {
   const queryClient = useQueryClient()
 
@@ -424,6 +572,8 @@ export function WatchlistGroups() {
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [sortMode, setSortMode] = useState<'custom' | 'ascending' | 'descending'>('custom')
   const [stockSortMode, setStockSortMode] = useState<'default' | 'ascending' | 'descending'>('default')
+  const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
+  const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
 
   // 视图模式（列表/卡片）- 自选板块专用
   const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
@@ -434,6 +584,56 @@ export function WatchlistGroups() {
   const [columns, setColumns] = useState<ColumnConfig[]>([...BUILTIN_COLUMNS])
   const [customizerOpen, setCustomizerOpen] = useState(false)
   const columnsLoaded = useRef(false)
+
+  // 日k蜡烛图显示状态
+  const [dailyKChartVisible, setDailyKChartVisible] = useState(() => {
+    return storage.watchlistGroupsCandle.get(true)
+  })
+
+  // 分时图显示状态
+  const [intradayChartVisible, setIntradayChartVisible] = useState(() => {
+    return storage.watchlistGroupsIntraday.get(true)
+  })
+
+  // 蜡烛列检测和配置
+  const candleColumn = useMemo(() =>
+    columns.find(c => c.source.type === 'builtin' && c.source.key === 'candle' && c.visible),
+    [columns],
+  )
+  const candleColumnEnabled = !!candleColumn
+  const candleResolved = useMemo(() => resolveCandleConfig(candleColumn?.candleConfig), [candleColumn])
+  const candleDays = candleResolved.days
+  const candleSize = dailyKChartVisible
+    ? { width: candleResolved.enabledWidth, height: candleResolved.enabledHeight }
+    : { width: candleResolved.disabledWidth, height: candleResolved.disabledHeight }
+  const dailyKVisible = candleColumnEnabled && dailyKChartVisible
+
+  // 分时列检测和配置
+  const intradayColumn = useMemo(() =>
+    columns.find(c => c.source.type === 'builtin' && c.source.key === 'intraday' && c.visible),
+    [columns],
+  )
+  const intradayResolved = useMemo(() => resolveIntradayConfig(intradayColumn?.intradayConfig), [intradayColumn])
+  const caps = useCapabilities()
+  const hasMinuteBatch = !!caps.data?.capabilities?.['kline.minute.batch']
+  const intradayVisible = !!intradayColumn && hasMinuteBatch && intradayChartVisible
+
+  // 切换函数
+  const toggleDailyKChart = useCallback(() => {
+    setDailyKChartVisible(v => {
+      const next = !v
+      storage.watchlistGroupsCandle.set(next)
+      return next
+    })
+  }, [])
+
+  const toggleIntradayChart = useCallback(() => {
+    setIntradayChartVisible(v => {
+      const next = !v
+      storage.watchlistGroupsIntraday.set(next)
+      return next
+    })
+  }, [])
 
   // 设置查询（仅用于侧边栏/卡片视图切换和平均涨跌幅模式）
   const settingsQuery = useQuery({
@@ -574,6 +774,19 @@ export function WatchlistGroups() {
     return columns.filter(c => c.visible)
   }, [columns])
 
+  // 计算 ext 列参数
+  const extColumnsParam = useMemo(() => buildExtColumnsParam(columns), [columns])
+
+  // 标签展开/收起处理
+  const handleToggleExpand = useCallback((cellKey: string) => {
+    setExpandedCells(prev => {
+      const next = new Set(prev)
+      if (next.has(cellKey)) next.delete(cellKey)
+      else next.add(cellKey)
+      return next
+    })
+  }, [])
+
   // 卡片列数
   const cardColumns = useCardColumnCount()
 
@@ -600,10 +813,52 @@ export function WatchlistGroups() {
   const groupsQuery = useQuery({ queryKey: QK.watchlistGroups, queryFn: api.watchlistGroups.list })
 
   const selectedGroupItemsQuery = useQuery({
-    queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId || ''),
-    queryFn: () => selectedGroupId ? api.watchlistGroups.listItemsEnriched(selectedGroupId) : null,
+    queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId || '', extColumnsParam),
+    queryFn: () => selectedGroupId ? api.watchlistGroups.listItemsEnriched(selectedGroupId, extColumnsParam) : null,
     enabled: !!selectedGroupId,
   })
+
+  // 获取当前选中板块的 symbol 列表
+  const currentSymbols = useMemo(() => {
+    return selectedGroupItemsQuery.data?.rows?.map((r: any) => r.symbol) ?? []
+  }, [selectedGroupItemsQuery.data])
+
+  const currentSymbolsKey = currentSymbols.join(',')
+
+  // 指数过滤，用于分时数据
+  const minuteSymbols = useMemo(
+    () => currentSymbols.filter((s: string) => (selectedGroupItemsQuery.data?.rows ?? []).find((r: any) => r.symbol === s)?.asset_type !== 'index'),
+    [currentSymbols, selectedGroupItemsQuery.data],
+  )
+  const minuteSymbolsKey = minuteSymbols.join(',')
+
+  // 实时行情状态
+  const quoteStatus = useQuoteStatus()
+  const realtimeRunning = quoteStatus.data?.running ?? false
+
+  // 批量日K数据
+  const klineBatch = useQuery({
+    queryKey: QK.watchlistKlineBatch(`${currentSymbolsKey}|${candleDays}`),
+    queryFn: () => api.klineDailyBatch(currentSymbols, candleDays),
+    enabled: dailyKVisible && currentSymbols.length > 0 && !!selectedGroupId,
+    staleTime: 5 * 60_000,
+  })
+
+  const klineData = dailyKVisible ? (klineBatch.data?.data ?? {}) : {}
+
+  // 批量分时数据
+  const { data: prefsData } = usePreferences()
+  const intradayRefreshEnabled = prefsData?.minute_intraday_refresh ?? false
+  const intradayRefreshInterval = prefsData?.minute_intraday_refresh_interval ?? 6
+
+  const minuteBatch = useQuery({
+    queryKey: QK.minuteBatch(minuteSymbolsKey),
+    queryFn: () => api.klineMinuteBatch(minuteSymbols),
+    enabled: intradayVisible && minuteSymbols.length > 0 && !!selectedGroupId,
+    staleTime: 10_000,
+    refetchInterval: (intradayRefreshEnabled && realtimeRunning) ? intradayRefreshInterval * 1000 : false,
+  })
+  const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
   useEffect(() => {
     // 只有在侧边栏视图时才自动设置第一个板块为选中
@@ -661,10 +916,10 @@ export function WatchlistGroups() {
 
   // 获取所有板块的 enriched 数据（用于卡片视图和侧边栏）
   const { data: allGroupItemsResponse } = useQuery({
-    queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(',')],
+    queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(','), extColumnsParam],
     queryFn: async () => {
       if (!groupsQuery.data?.groups?.length) return { groups: {} }
-      return await api.watchlistGroups.listAllItemsEnriched()
+      return await api.watchlistGroups.listAllItemsEnriched(extColumnsParam)
     },
     enabled: !!groupsQuery.data?.groups?.length,
     staleTime: 60_000,
@@ -747,6 +1002,11 @@ export function WatchlistGroups() {
 
 
   const renderCell = useCallback((row: any, col: ColumnConfig): React.ReactNode => {
+    // ext 列
+    if (col.source.type === 'ext') {
+      return renderExtCell(row, col, expandedCells, handleToggleExpand, setDimensionTarget)
+    }
+    
     if (col.source.type === 'builtin' && col.source.key === 'symbol') {
       const currentGroupItems = selectedGroupItemsQuery.data?.rows || []
       const currentSymbols = currentGroupItems.map(r => r.symbol)
@@ -829,24 +1089,88 @@ export function WatchlistGroups() {
         </td>
       )
     }
-    // 日K蜡烛图列
-    if (col.source.type === 'builtin' && col.source.key === 'candle') {
+    const key = col.source.key
+    const price = row.rt_price ?? row.close
+    const pct = row.rt_pct ?? row.change_pct
+
+    // 实时行情列：price/pct/amount 使用 rt_ 回退
+    const numCls = 'px-2 py-1.5 text-right num tabular-nums'
+    if (key === 'price') {
+      return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPrice(price)}</td>
+    }
+    if (key === 'pct') {
+      return <td className={`${numCls} ${priceColorClass(pct)}`}>{fmtPct(pct)}</td>
+    }
+    if (key === 'amount') {
+      return <td className={`${numCls} text-secondary`}>{fmtBigNum(row.rt_amount ?? row.amount)}</td>
+    }
+    if (key === 'turnover') {
+      return <td className={`${numCls} ${turnoverColor(row.turnover_rate)}`}>{row.turnover_rate != null ? `${row.turnover_rate.toFixed(2)}%` : '—'}</td>
+    }
+
+    // 信号列
+    if (key === 'signals') {
+      const signals = getSignals(row)
       return (
-        <td key={col.id} className="px-2 py-1.5">
-          {/* 暂时不实现蜡烛图，占位 */}
+        <td className="px-2 py-1.5">
+          {signals.length > 0 && (
+            <div className="flex flex-wrap gap-0.5">
+              {signals.slice(0, 3).map((s) => (
+                <span key={s.label} className={`inline-block px-1.5 py-px rounded text-[10px] font-medium leading-tight ${signalCls(s.type)}`}>
+                  {s.label}
+                </span>
+              ))}
+              {signals.length > 3 && (
+                <span className="text-[10px] text-muted">+{signals.length - 3}</span>
+              )}
+            </div>
+          )}
         </td>
       )
     }
+
+    // 日k蜡烛图列
+    if (key === 'candle') {
+      return (
+        <td
+          className="pl-2 pr-3 py-1.5"
+          style={{ width: candleSize.width + 4, minWidth: candleSize.width + 4, maxWidth: candleSize.width + 4, height: candleSize.height }}
+        >
+          <MiniCandlestick rows={klineData[row.symbol] ?? []} width={candleSize.width} height={candleSize.height} />
+        </td>
+      )
+    }
+
     // 分时图列
-    if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+    if (key === 'intraday') {
+      // 指数无本地分钟K数据，分时列降级为占位符
+      if (row.asset_type === 'index') {
+        const iw = intradayChartVisible ? intradayResolved.width : 40
+        const ih = intradayChartVisible ? intradayResolved.height : 40
+        return (
+          <td className="pl-3 pr-2 py-1.5 border-l border-border/30" style={{ width: iw + 4, minWidth: iw + 4, maxWidth: iw + 4, height: ih }}>
+            <div className="flex items-center justify-center">
+              <span className="text-[10px] text-muted">—</span>
+            </div>
+          </td>
+        )
+      }
+      const rows: MinuteKlineRow[] = minuteData[row.symbol] ?? []
+      const iw = intradayChartVisible ? intradayResolved.width : 40
+      const ih = intradayChartVisible ? intradayResolved.height : 40
       return (
-        <td key={col.id} className="px-2 py-1.5">
-          {/* 暂时不实现分时图，占位 */}
+        <td className="pl-3 pr-2 py-1.5 border-l border-border/30" style={{ width: iw + 4, minWidth: iw + 4, maxWidth: iw + 4, height: ih }}>
+          <div className="flex items-center justify-center">
+            {intradayChartVisible
+              ? <MiniIntraday rows={rows} prevClose={row.prev_close} changePct={row.change_pct} width={iw - 4} height={ih} />
+              : <span className="text-[10px] text-muted">分时</span>}
+          </div>
         </td>
       )
     }
+
     return renderBuiltinDataCell(row, col)
-  }, [selectedGroupId, removeItemMutation])
+  }, [selectedGroupId, removeItemMutation, expandedCells, handleToggleExpand, candleSize, klineData, intradayChartVisible, intradayResolved, minuteData])
 
   const renderSidebarView = () => (
     <div className="flex h-full">
@@ -1072,6 +1396,68 @@ export function WatchlistGroups() {
                   rowKey={(row) => row.symbol}
                   sort={sort}
                   onSortToggle={handleSortToggle}
+                  // 日k列表头：标签 + 显示/隐藏眼睛按钮
+                  renderHeaderContent={(col) => {
+                    if (col.source.type === 'builtin' && col.source.key === 'candle') {
+                      return (
+                        <span className="inline-flex items-center justify-center gap-1.5">
+                          <span>{col.label}</span>
+                          <button
+                            type="button"
+                            onClick={(event) => { event.stopPropagation(); toggleDailyKChart() }}
+                            className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                              dailyKChartVisible
+                                ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                : 'text-muted hover:text-foreground hover:bg-elevated'
+                            }`}
+                            title={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
+                            aria-label={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
+                          >
+                            {dailyKChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                          </button>
+                        </span>
+                      )
+                    }
+                    if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+                      const intradayAutoRefresh = intradayRefreshEnabled && realtimeRunning
+                      return (
+                        <span className="inline-flex items-center justify-center gap-1.5">
+                          <span>{col.label}</span>
+                          <button
+                            type="button"
+                            onClick={(event) => { event.stopPropagation(); toggleIntradayChart() }}
+                            className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                              intradayChartVisible
+                                ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                : 'text-muted hover:text-foreground hover:bg-elevated'
+                            }`}
+                            title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                            aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                          >
+                            {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                          </button>
+                          {/* 分时图显示 且 未开自动轮询时，提供手动刷新按钮 */}
+                          {intradayChartVisible && !intradayAutoRefresh && (
+                            <button
+                              type="button"
+                              onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
+                              disabled={minuteBatch.isFetching}
+                              className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                              title="刷新分时数据"
+                              aria-label="刷新分时数据"
+                            >
+                              <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
+                            </button>
+                          )}
+                          {/* 自动轮询中：显示旋转图标提示正在实时刷新 */}
+                          {intradayChartVisible && intradayAutoRefresh && (
+                            <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+                          )}
+                        </span>
+                      )
+                    }
+                    return undefined
+                  }}
                 />
               ) : (
                 <div className={`grid gap-3 ${
@@ -1464,12 +1850,22 @@ export function WatchlistGroups() {
         }}
       />
 
-      {/* 列自定义器 - 自选板块专用 */}
+      {/* 列自定义侧栏 - 自选板块专用 */}
       <ColumnCustomizer
         columns={columns}
         onChange={handleColumnsChange}
         open={customizerOpen}
         onClose={() => setCustomizerOpen(false)}
+      />
+
+      <DimensionMembersDialog
+        target={dimensionTarget}
+        onClose={() => setDimensionTarget(null)}
+        onStockClick={(symbol, name) => {
+          setDimensionTarget(null)
+          setPreviewSymbol(symbol)
+          setPreviewName(name ?? '')
+        }}
       />
     </div>
   )
