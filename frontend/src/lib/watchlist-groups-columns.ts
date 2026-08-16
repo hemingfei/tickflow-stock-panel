@@ -1,5 +1,5 @@
 /**
- * 自选板块列表自定义列配置。
+ * 自选分组列表自定义列配置。
  *
  * 与自选列表配置完全独立，互不影响。
  */
@@ -30,7 +30,7 @@ export function serializeColumns(columns: ColumnConfig[]): ColumnConfig[] {
   return serializeColumnsBase(columns, ACTION_COLUMN_ID)
 }
 
-/** 序列化并保存到后端 + localStorage（自选板块专用） */
+/** 序列化并保存到后端 + localStorage（自选分组专用） */
 export async function saveColumnConfig(columns: ColumnConfig[]): Promise<void> {
   const saveable = serializeColumns(columns)
   // 同时写 localStorage（即时）和后端（持久化）
@@ -43,7 +43,7 @@ export async function saveColumnConfig(columns: ColumnConfig[]): Promise<void> {
   }
 }
 
-/** 加载列配置：优先后端，回退 localStorage，最终用默认值（自选板块专用） */
+/** 加载列配置：优先后端，回退 localStorage，最终用默认值（自选分组专用） */
 export async function loadColumnConfig(): Promise<ColumnConfig[]> {
   // 1. 尝试从后端加载
   try {

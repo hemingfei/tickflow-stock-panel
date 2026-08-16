@@ -127,15 +127,15 @@ export const storage = {
   /** 数据页画像卡片顺序 (卡片key 数组, 长度=卡片总数) */
   dataCardOrder: kv<string[]>('data-card-order'),
 
-  /** 自选板块列表列配置 */
+  /** 自选分组列表列配置 */
   watchlistGroupsColumns: kv<unknown[]>('watchlist_groups_columns'),
 
-  /** 自选板块列表视图模式 table | card */
+  /** 自选分组列表视图模式 table | card */
   watchlistGroupsView: kv<string>('watchlist_groups_view'),
 
-  /** 自选板块列表日K蜡烛图显示状态 */
+  /** 自选分组列表日K蜡烛图显示状态 */
   watchlistGroupsCandle: kv<boolean>('watchlist_groups_showCandle'),
 
-  /** 自选板块列表分时图显示状态 */
+  /** 自选分组列表分时图显示状态 */
   watchlistGroupsIntraday: kv<boolean>('watchlist_groups_showIntraday'),
 } as const

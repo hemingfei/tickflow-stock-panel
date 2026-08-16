@@ -147,7 +147,7 @@ function StockSearchBox({
                         ? 'text-accent bg-accent/10 cursor-default'
                         : 'text-muted hover:text-accent hover:bg-accent/10'
                     }`}
-                    title={inWatchlist ? '已添加' : '添加到板块'}
+                    title={inWatchlist ? '已添加' : '添加到分组'}
                   >
                     {inWatchlist ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
                   </button>
@@ -192,7 +192,7 @@ function useCardColumnCount(): number {
   return count
 }
 
-// 自选板块专用的 StockCard 组件
+// 自选分组专用的 StockCard 组件
 const StockCard = React.memo(function StockCard({
   r,
   onPreview,
@@ -257,7 +257,7 @@ const StockCard = React.memo(function StockCard({
           <button
             onClick={e => { e.stopPropagation(); onRequestRemove(r.symbol) }}
             className="opacity-0 group-hover:opacity-100 text-muted hover:text-danger transition-all duration-150 p-0.5 rounded hover:bg-elevated"
-            aria-label="移出板块"
+            aria-label="移出分组"
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -342,7 +342,7 @@ const StockCard = React.memo(function StockCard({
   )
 })
 
-// 单个板块卡片组件 - 接收数据作为 props
+// 单个分组卡片组件 - 接收数据作为 props
 function GroupCard({
   group,
   onSelect,
@@ -595,12 +595,12 @@ export function WatchlistGroups() {
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
 
-  // 视图模式（列表/卡片）- 自选板块专用
+  // 视图模式（列表/卡片）- 自选分组专用
   const [viewMode, setViewMode] = useState<'table' | 'card'>(() => {
     return (storage.watchlistGroupsView.get('table') as 'table' | 'card')
   })
 
-  // 列配置 - 自选板块专用
+  // 列配置 - 自选分组专用
   const [columns, setColumns] = useState<ColumnConfig[]>([...BUILTIN_COLUMNS])
   const [customizerOpen, setCustomizerOpen] = useState(false)
   const columnsLoaded = useRef(false)
@@ -688,7 +688,7 @@ export function WatchlistGroups() {
     mutationFn: (name: string) => api.watchlistGroups.create(name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
-      toast('板块创建成功')
+      toast('分组创建成功')
       setCreateDialogOpen(false)
       setNewGroupName('')
     },
@@ -699,7 +699,7 @@ export function WatchlistGroups() {
     mutationFn: ({ groupId, name }: { groupId: string; name: string }) => api.watchlistGroups.rename(groupId, name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
-      toast('板块重命名成功')
+      toast('分组重命名成功')
       setRenameDialogOpen(false)
       setCurrentGroupForDialog(null)
     },
@@ -710,7 +710,7 @@ export function WatchlistGroups() {
     mutationFn: (groupId: string) => api.watchlistGroups.delete(groupId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
-      toast('板块删除成功')
+      toast('分组删除成功')
       setDeleteDialogOpen(false)
       if (selectedGroupId === currentGroupForDialog?.group_id) {
         setSelectedGroupId(null)
@@ -767,7 +767,7 @@ export function WatchlistGroups() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
     },
-    onError: (e: any) => toast(e.message || '板块置顶失败', 'error'),
+    onError: (e: any) => toast(e.message || '分组置顶失败', 'error'),
   })
 
   // 加载列配置
@@ -841,7 +841,7 @@ export function WatchlistGroups() {
     enabled: !!selectedGroupId,
   })
 
-  // 获取当前选中板块的 symbol 列表
+  // 获取当前选中分组的 symbol 列表
   const currentSymbols = useMemo(() => {
     return selectedGroupItemsQuery.data?.rows?.map((r: any) => r.symbol) ?? []
   }, [selectedGroupItemsQuery.data])
@@ -884,7 +884,7 @@ export function WatchlistGroups() {
   const minuteData = intradayVisible ? (minuteBatch.data?.data ?? {}) : {}
 
   useEffect(() => {
-    // 只有在侧边栏视图时才自动设置第一个板块为选中
+    // 只有在侧边栏视图时才自动设置第一个分组为选中
     if (groupsQuery.data?.groups?.length && !selectedGroupId && sidebarOrCardsView === 'sidebar') {
       setSelectedGroupId(groupsQuery.data.groups[0].group_id)
     }
@@ -901,7 +901,7 @@ export function WatchlistGroups() {
   }, [])
 
 
-  // 前端计算板块平均涨跌幅
+  // 前端计算分组平均涨跌幅
   const calculateGroupAvgChange = useCallback((group: any, allGroupItems?: Record<string, any[]>) => {
     const items = allGroupItems?.[group.group_id]
     if (!items || items.length === 0) return { simple: null, weighted: null }
@@ -930,7 +930,7 @@ export function WatchlistGroups() {
     }
   }, [])
 
-  // 获取所有板块的 enriched 数据（用于卡片视图和侧边栏）
+  // 获取所有分组的 enriched 数据（用于卡片视图和侧边栏）
   const { data: allGroupItemsResponse, refetch: refetchAllGroupItems, isFetching: isFetchingAllGroupItems } = useQuery({
     queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(','), extColumnsParam],
     queryFn: async () => {
@@ -989,7 +989,7 @@ export function WatchlistGroups() {
     })
   }, [])
 
-  // 对板块进行排序
+  // 对分组进行排序
   const sortedGroups = useMemo(() => {
     if (!groupsQuery.data?.groups) return []
     const groups = [...groupsQuery.data.groups]
@@ -998,7 +998,7 @@ export function WatchlistGroups() {
       return groups
     }
 
-    // 计算每个板块的平均涨跌幅
+    // 计算每个分组的平均涨跌幅
     const groupsWithAvg = groups.map(group => {
       const items = allGroupItems?.[group.group_id]
       const avgChange = items ? calculateGroupAvgChange(group, { [group.group_id]: items }) : { simple: null, weighted: null }
@@ -1192,7 +1192,7 @@ export function WatchlistGroups() {
     <div className="flex h-full">
       <div className="w-64 border-r bg-surface p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">板块</h2>
+          <h2 className="text-lg font-semibold">分组</h2>
           <div className="flex items-center gap-2">
             {/* 列表/卡片视图切换 */}
             <button
@@ -1239,7 +1239,7 @@ export function WatchlistGroups() {
                       className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
                     >
                       <Plus className="h-3.5 w-3.5" />
-                      新建板块
+                      新建分组
                     </button>
                     {selectedGroupId && (
                       <>
@@ -1258,7 +1258,7 @@ export function WatchlistGroups() {
                           className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
                         >
                           <Edit2 className="h-3.5 w-3.5" />
-                          重命名板块
+                          重命名分组
                         </button>
                         <button
                           type="button"
@@ -1273,7 +1273,7 @@ export function WatchlistGroups() {
                           className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2 text-danger"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
-                          删除板块
+                          删除分组
                         </button>
                       </>
                     )}
@@ -1530,11 +1530,11 @@ export function WatchlistGroups() {
                 )
               })()
             ) : (
-              <EmptyState title="该板块暂无股票" hint="点击右上角新建板块或添加股票" />
+              <EmptyState title="该分组暂无股票" hint="点击右上角新建分组或添加股票" />
             )}
           </div>
         ) : (
-          <EmptyState title="请选择一个板块" hint="从左侧选择或创建一个新的板块" />
+          <EmptyState title="请选择一个分组" hint="从左侧选择或创建一个新的分组" />
         )}
       </div>
     </div>
@@ -1542,10 +1542,10 @@ export function WatchlistGroups() {
 
   const renderCardsView = () => (
     <div className="flex h-full">
-      {/* 左侧侧边栏 - 显示所有板块 */}
+      {/* 左侧侧边栏 - 显示所有分组 */}
       <div className="w-64 border-r bg-surface p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">板块</h2>
+          <h2 className="text-lg font-semibold">分组</h2>
           <div className="flex items-center gap-2">
             {/* 列表/卡片视图切换 */}
             <button
@@ -1592,7 +1592,7 @@ export function WatchlistGroups() {
                       className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
                     >
                       <Plus className="h-3.5 w-3.5" />
-                      新建板块
+                      新建分组
                     </button>
                     {selectedGroupId && (
                       <>
@@ -1611,7 +1611,7 @@ export function WatchlistGroups() {
                           className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
                         >
                           <Edit2 className="h-3.5 w-3.5" />
-                          重命名板块
+                          重命名分组
                         </button>
                         <button
                           type="button"
@@ -1626,7 +1626,7 @@ export function WatchlistGroups() {
                           className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2 text-danger"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
-                          删除板块
+                          删除分组
                         </button>
                       </>
                     )}
@@ -1724,11 +1724,11 @@ export function WatchlistGroups() {
 
       {/* 右侧内容 */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        {/* 上半部分：板块列表 */}
+        {/* 上半部分：分组列表 */}
         <div className={`flex-shrink-0 overflow-y-auto ${selectedGroupId ? 'h-1/2' : 'h-full'} border-b border-border`}>
           <div className="p-6">
             <div className="flex items-center justify-between mb-6">
-              <h1 className="text-2xl font-bold">自选板块</h1>
+              <h1 className="text-2xl font-bold">自选分组</h1>
                 <div className="flex items-center gap-2">
                   {/* 视图切换按钮 */}
                   <button
@@ -1755,7 +1755,7 @@ export function WatchlistGroups() {
                   onClick={() => refetchAllGroupItems()}
                   disabled={isFetchingAllGroupItems}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
-                  title="刷新板块数据"
+                  title="刷新分组数据"
                 >
                   <RefreshCw className={`h-4 w-4 ${isFetchingAllGroupItems ? 'animate-spin' : ''}`} />
                 </button>
@@ -1800,7 +1800,7 @@ export function WatchlistGroups() {
                       )}
                       onClick={() => setSelectedGroupId(group.group_id === selectedGroupId ? null : group.group_id)}
                     >
-                      {/* 板块标题栏 */}
+                      {/* 分组标题栏 */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <h2 className="text-lg font-semibold">{group.name}</h2>
@@ -1843,7 +1843,7 @@ export function WatchlistGroups() {
                           ))}
                         </div>
                       ) : (
-                        <div className="text-sm text-muted py-4">该板块暂无股票</div>
+                        <div className="text-sm text-muted py-4">该分组暂无股票</div>
                       )}
                     </div>
                   )
@@ -1853,7 +1853,7 @@ export function WatchlistGroups() {
           </div>
         </div>
 
-        {/* 下半部分：板块详情（当选择板块时显示） */}
+        {/* 下半部分：分组详情（当选择分组时显示） */}
         {selectedGroupId && (
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0 bg-elevated/30">
@@ -2025,7 +2025,7 @@ export function WatchlistGroups() {
                   )
                 })()
               ) : (
-                <EmptyState title="该板块暂无股票" />
+                <EmptyState title="该分组暂无股票" />
               )}
             </div>
           </div>
@@ -2044,7 +2044,7 @@ export function WatchlistGroups() {
           panelClassName="w-[90vw] max-w-md bg-surface border border-border rounded-lg shadow-xl"
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <h2 className="text-lg font-semibold">新建板块</h2>
+            <h2 className="text-lg font-semibold">新建分组</h2>
             <button
               type="button"
               onClick={() => setCreateDialogOpen(false)}
@@ -2056,7 +2056,7 @@ export function WatchlistGroups() {
           <div className="p-4">
             <input
               type="text"
-              placeholder="输入板块名称"
+              placeholder="输入分组名称"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
               onKeyDown={(e) => {
@@ -2100,7 +2100,7 @@ export function WatchlistGroups() {
           panelClassName="w-[90vw] max-w-md bg-surface border border-border rounded-lg shadow-xl"
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <h2 className="text-lg font-semibold">重命名板块</h2>
+            <h2 className="text-lg font-semibold">重命名分组</h2>
             <button
               type="button"
               onClick={() => {
@@ -2115,7 +2115,7 @@ export function WatchlistGroups() {
           <div className="p-4">
             <input
               type="text"
-              placeholder="输入新板块名称"
+              placeholder="输入新分组名称"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
               onKeyDown={(e) => {
@@ -2162,7 +2162,7 @@ export function WatchlistGroups() {
           panelClassName="w-[90vw] max-w-md bg-surface border border-border rounded-lg shadow-xl"
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <h2 className="text-lg font-semibold">删除板块</h2>
+            <h2 className="text-lg font-semibold">删除分组</h2>
             <button
               type="button"
               onClick={() => {
@@ -2175,7 +2175,7 @@ export function WatchlistGroups() {
             </button>
           </div>
           <div className="p-4">
-            <p className="text-muted">确定要删除板块「{currentGroupForDialog?.name}」吗？此操作不可撤销。</p>
+            <p className="text-muted">确定要删除分组「{currentGroupForDialog?.name}」吗？此操作不可撤销。</p>
           </div>
           <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-border">
             <button
@@ -2214,7 +2214,7 @@ export function WatchlistGroups() {
         }}
       />
 
-      {/* 列自定义侧栏 - 自选板块专用 */}
+      {/* 列自定义侧栏 - 自选分组专用 */}
       <ColumnCustomizer
         columns={columns}
         onChange={handleColumnsChange}
