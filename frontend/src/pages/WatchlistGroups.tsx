@@ -1864,6 +1864,44 @@ export function WatchlistGroups() {
                   existingSymbols={selectedGroupItemsQuery.data?.rows?.map(r => r.symbol) ?? []}
                   onAdd={(sym) => addItemMutation.mutate({ groupId: selectedGroupId, symbol: sym })}
                 />
+                <div className="w-px h-5 bg-border" />
+                {/* 视图切换按钮 */}
+                <button
+                  onClick={toggleView}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                  title={viewMode === 'table' ? '卡片视图' : '列表视图'}
+                >
+                  {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
+                </button>
+                {/* 个股涨跌幅排序按钮 */}
+                <button
+                  type="button"
+                  onClick={toggleStockSortMode}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                  title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
+                >
+                  {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
+                  {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+                  {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+                </button>
+                {/* 刷新按钮 */}
+                <button
+                  onClick={() => selectedGroupItemsQuery.refetch()}
+                  disabled={selectedGroupItemsQuery.isFetching}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
+                  title="刷新"
+                >
+                  <RefreshCw className={`h-4 w-4 ${selectedGroupItemsQuery.isFetching ? 'animate-spin' : ''}`} />
+                </button>
+                <div className="w-px h-5 bg-border" />
+                {/* 自定义列按钮 */}
+                <button
+                  onClick={() => setCustomizerOpen(true)}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                  title="自定义列"
+                >
+                  <Settings2 className="h-4 w-4" />
+                </button>
                 <button
                   type="button"
                   onClick={() => setSelectedGroupId(null)}
@@ -1891,47 +1929,6 @@ export function WatchlistGroups() {
                   
                   return (
                     <div className="flex flex-col">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="flex items-center gap-2">
-                          {/* 视图切换按钮 */}
-                          <button
-                            onClick={toggleView}
-                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-                            title={viewMode === 'table' ? '卡片视图' : '列表视图'}
-                          >
-                            {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
-                          </button>
-                          {/* 个股涨跌幅排序按钮 */}
-                          <button
-                            type="button"
-                            onClick={toggleStockSortMode}
-                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-                            title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
-                          >
-                            {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
-                            {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
-                            {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
-                          </button>
-                          {/* 刷新按钮 */}
-                          <button
-                            onClick={() => selectedGroupItemsQuery.refetch()}
-                            disabled={selectedGroupItemsQuery.isFetching}
-                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
-                            title="刷新"
-                          >
-                            <RefreshCw className={`h-4 w-4 ${selectedGroupItemsQuery.isFetching ? 'animate-spin' : ''}`} />
-                          </button>
-                          <div className="w-px h-5 bg-border" />
-                          {/* 自定义列按钮 */}
-                          <button
-                            onClick={() => setCustomizerOpen(true)}
-                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-                            title="自定义列"
-                          >
-                            <Settings2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </div>
                       {viewMode === 'table' ? (
                         <StockDataTable
                           columns={visibleColumns}
