@@ -931,7 +931,7 @@ export function WatchlistGroups() {
   }, [])
 
   // 获取所有板块的 enriched 数据（用于卡片视图和侧边栏）
-  const { data: allGroupItemsResponse } = useQuery({
+  const { data: allGroupItemsResponse, refetch: refetchAllGroupItems, isFetching: isFetchingAllGroupItems } = useQuery({
     queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(','), extColumnsParam],
     queryFn: async () => {
       if (!groupsQuery.data?.groups?.length) return { groups: {} }
@@ -1194,6 +1194,16 @@ export function WatchlistGroups() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">板块</h2>
           <div className="flex items-center gap-2">
+            {/* 列表/卡片视图切换 */}
+            <button
+              type="button"
+              onClick={() => setSidebarOrCardsViewMutation.mutate(sidebarOrCardsView === 'sidebar' ? 'cards' : 'sidebar')}
+              disabled={setSidebarOrCardsViewMutation.isPending}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+              title={sidebarOrCardsView === 'sidebar' ? '切换到卡片视图' : '切换到列表视图'}
+            >
+              {sidebarOrCardsView === 'sidebar' ? <Grid className="h-4 w-4" /> : <List className="h-4 w-4" />}
+            </button>
             <button
               type="button"
               onClick={toggleSortMode}
@@ -1380,14 +1390,16 @@ export function WatchlistGroups() {
                 >
                   {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
                 </button>
-                <div className="w-px h-5 bg-border" />
-                {/* 自定义列按钮 */}
+                {/* 个股涨跌幅排序按钮 */}
                 <button
-                  onClick={() => setCustomizerOpen(true)}
+                  type="button"
+                  onClick={toggleStockSortMode}
                   className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-                  title="自定义列"
+                  title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
                 >
-                  <Settings2 className="h-4 w-4" />
+                  {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
+                  {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+                  {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
                 </button>
                 {/* 刷新按钮 */}
                 <button
@@ -1398,104 +1410,125 @@ export function WatchlistGroups() {
                 >
                   <RefreshCw className={`h-4 w-4 ${selectedGroupItemsQuery.isFetching ? 'animate-spin' : ''}`} />
                 </button>
+                <div className="w-px h-5 bg-border" />
+                {/* 自定义列按钮 */}
+                <button
+                  onClick={() => setCustomizerOpen(true)}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                  title="自定义列"
+                >
+                  <Settings2 className="h-4 w-4" />
+                </button>
               </div>
             </div>
             {selectedGroupItemsQuery.isLoading ? (
               <EmptyState title="加载中…" />
             ) : selectedGroupItemsQuery.data?.rows && selectedGroupItemsQuery.data.rows.length > 0 ? (
-              viewMode === 'table' ? (
-                <StockDataTable
-                  columns={visibleColumns}
-                  rows={sortRows(selectedGroupItemsQuery.data.rows, visibleColumns)}
-                  renderCell={renderCell}
-                  headerSticky={true}
-                  rowKey={(row) => row.symbol}
-                  sort={sort}
-                  onSortToggle={handleSortToggle}
-                  // 日k列表头：标签 + 显示/隐藏眼睛按钮
-                  renderHeaderContent={(col) => {
-                    if (col.source.type === 'builtin' && col.source.key === 'candle') {
-                      return (
-                        <span className="inline-flex items-center justify-center gap-1.5">
-                          <span>{col.label}</span>
-                          <button
-                            type="button"
-                            onClick={(event) => { event.stopPropagation(); toggleDailyKChart() }}
-                            className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
-                              dailyKChartVisible
-                                ? 'text-accent bg-accent/10 hover:bg-accent/20'
-                                : 'text-muted hover:text-foreground hover:bg-elevated'
-                            }`}
-                            title={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
-                            aria-label={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
-                          >
-                            {dailyKChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                          </button>
-                        </span>
-                      )
-                    }
-                    if (col.source.type === 'builtin' && col.source.key === 'intraday') {
-                      const intradayAutoRefresh = intradayRefreshEnabled && realtimeRunning
-                      return (
-                        <span className="inline-flex items-center justify-center gap-1.5">
-                          <span>{col.label}</span>
-                          <button
-                            type="button"
-                            onClick={(event) => { event.stopPropagation(); toggleIntradayChart() }}
-                            className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
-                              intradayChartVisible
-                                ? 'text-accent bg-accent/10 hover:bg-accent/20'
-                                : 'text-muted hover:text-foreground hover:bg-elevated'
-                            }`}
-                            title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
-                            aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
-                          >
-                            {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                          </button>
-                          {/* 分时图显示 且 未开自动轮询时，提供手动刷新按钮 */}
-                          {intradayChartVisible && !intradayAutoRefresh && (
+              (() => {
+                // Sort selected group's rows if stockSortMode is not default
+                let sortedRows = [...selectedGroupItemsQuery.data.rows];
+                if (stockSortMode !== 'default') {
+                  sortedRows.sort((a, b) => {
+                    const aPct = a.change_pct ?? 0;
+                    const bPct = b.change_pct ?? 0;
+                    return stockSortMode === 'descending' ? bPct - aPct : aPct - bPct;
+                  });
+                }
+                
+                return viewMode === 'table' ? (
+                  <StockDataTable
+                    columns={visibleColumns}
+                    rows={sortRows(sortedRows, visibleColumns)}
+                    renderCell={renderCell}
+                    headerSticky={true}
+                    rowKey={(row) => row.symbol}
+                    sort={sort}
+                    onSortToggle={handleSortToggle}
+                    // 日k列表头：标签 + 显示/隐藏眼睛按钮
+                    renderHeaderContent={(col) => {
+                      if (col.source.type === 'builtin' && col.source.key === 'candle') {
+                        return (
+                          <span className="inline-flex items-center justify-center gap-1.5">
+                            <span>{col.label}</span>
                             <button
                               type="button"
-                              onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
-                              disabled={minuteBatch.isFetching}
-                              className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
-                              title="刷新分时数据"
-                              aria-label="刷新分时数据"
+                              onClick={(event) => { event.stopPropagation(); toggleDailyKChart() }}
+                              className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                                dailyKChartVisible
+                                  ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                  : 'text-muted hover:text-foreground hover:bg-elevated'
+                              }`}
+                              title={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
+                              aria-label={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
                             >
-                              <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
+                              {dailyKChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                             </button>
-                          )}
-                          {/* 自动轮询中：显示旋转图标提示正在实时刷新 */}
-                          {intradayChartVisible && intradayAutoRefresh && (
-                            <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
-                          )}
-                        </span>
-                      )
-                    }
-                    return undefined
-                  }}
-                />
-              ) : (
-                <div className={`grid gap-3 ${
-                  cardColumns === 6 ? '2xl:grid-cols-6' :
-                  cardColumns === 5 ? 'xl:grid-cols-5' :
-                  cardColumns === 4 ? 'md:grid-cols-4' :
-                  cardColumns === 3 ? 'sm:grid-cols-3' :
-                  'grid-cols-2'
-                }`}>
-                  {selectedGroupItemsQuery.data.rows.map((row) => (
-                    <StockCard
-                      key={row.symbol}
-                      r={row}
-                      onPreview={handleCardPreview}
-                      onConfirmRemove={handleCardConfirmRemove}
-                      onCancelRemove={handleCardCancelRemove}
-                      onRequestRemove={handleCardRequestRemove}
-                      isConfirming={confirmRemove === row.symbol}
-                    />
-                  ))}
-                </div>
-              )
+                          </span>
+                        )
+                      }
+                      if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+                        const intradayAutoRefresh = intradayRefreshEnabled && realtimeRunning
+                        return (
+                          <span className="inline-flex items-center justify-center gap-1.5">
+                            <span>{col.label}</span>
+                            <button
+                              type="button"
+                              onClick={(event) => { event.stopPropagation(); toggleIntradayChart() }}
+                              className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                                intradayChartVisible
+                                  ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                  : 'text-muted hover:text-foreground hover:bg-elevated'
+                              }`}
+                              title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                              aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                            >
+                              {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                            </button>
+                            {/* 分时图显示 且 未开自动轮询时，提供手动刷新按钮 */}
+                            {intradayChartVisible && !intradayAutoRefresh && (
+                              <button
+                                type="button"
+                                onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
+                                disabled={minuteBatch.isFetching}
+                                className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                                title="刷新分时数据"
+                                aria-label="刷新分时数据"
+                              >
+                                <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
+                              </button>
+                            )}
+                            {/* 自动轮询中：显示旋转图标提示正在实时刷新 */}
+                            {intradayChartVisible && intradayAutoRefresh && (
+                              <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+                            )}
+                          </span>
+                        )
+                      }
+                      return undefined
+                    }}
+                  />
+                ) : (
+                  <div className={`grid gap-3 ${
+                    cardColumns === 6 ? '2xl:grid-cols-6' :
+                    cardColumns === 5 ? 'xl:grid-cols-5' :
+                    cardColumns === 4 ? 'md:grid-cols-4' :
+                    cardColumns === 3 ? 'sm:grid-cols-3' :
+                    'grid-cols-2'
+                  }`}>
+                    {sortedRows.map((row) => (
+                      <StockCard
+                        key={row.symbol}
+                        r={row}
+                        onPreview={handleCardPreview}
+                        onConfirmRemove={handleCardConfirmRemove}
+                        onCancelRemove={handleCardCancelRemove}
+                        onRequestRemove={handleCardRequestRemove}
+                        isConfirming={confirmRemove === row.symbol}
+                      />
+                    ))}
+                  </div>
+                )
+              })()
             ) : (
               <EmptyState title="该板块暂无股票" hint="点击右上角新建板块或添加股票" />
             )}
@@ -1514,6 +1547,16 @@ export function WatchlistGroups() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">板块</h2>
           <div className="flex items-center gap-2">
+            {/* 列表/卡片视图切换 */}
+            <button
+              type="button"
+              onClick={() => setSidebarOrCardsViewMutation.mutate(sidebarOrCardsView === 'sidebar' ? 'cards' : 'sidebar')}
+              disabled={setSidebarOrCardsViewMutation.isPending}
+              className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+              title={sidebarOrCardsView === 'sidebar' ? '切换到卡片视图' : '切换到列表视图'}
+            >
+              {sidebarOrCardsView === 'sidebar' ? <Grid className="h-4 w-4" /> : <List className="h-4 w-4" />}
+            </button>
             <button
               type="button"
               onClick={toggleSortMode}
@@ -1524,6 +1567,106 @@ export function WatchlistGroups() {
               {sortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
               {sortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
             </button>
+            <div className="relative" ref={sidebarSettingsMenuRef}>
+              <button
+                type="button"
+                onClick={() => setSidebarSettingsMenuOpen(!sidebarSettingsMenuOpen)}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+              <AnimatePresence>
+                {sidebarSettingsMenuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    className="absolute right-0 top-full mt-1 w-40 bg-surface border border-border rounded-btn shadow-xl z-50"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSidebarSettingsMenuOpen(false)
+                        setCreateDialogOpen(true)
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      新建板块
+                    </button>
+                    {selectedGroupId && (
+                      <>
+                        <div className="border-t border-border my-1" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSidebarSettingsMenuOpen(false)
+                            const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
+                            if (group) {
+                              setCurrentGroupForDialog(group)
+                              setNewGroupName(group.name)
+                              setRenameDialogOpen(true)
+                            }
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2"
+                        >
+                          <Edit2 className="h-3.5 w-3.5" />
+                          重命名板块
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSidebarSettingsMenuOpen(false)
+                            const group = groupsQuery.data?.groups?.find(g => g.group_id === selectedGroupId)
+                            if (group) {
+                              setCurrentGroupForDialog(group)
+                              setDeleteDialogOpen(true)
+                            }
+                          }}
+                          className="w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2 text-danger"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          删除板块
+                        </button>
+                      </>
+                    )}
+                    <div className="border-t border-border my-1" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSidebarSettingsMenuOpen(false)
+                        setAvgPctModeMutation.mutate('simple')
+                      }}
+                      disabled={setAvgPctModeMutation.isPending}
+                      className={cn(
+                        'w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2',
+                        avgPctMode === 'simple' ? 'text-accent bg-accent/10' : ''
+                      )}
+                    >
+                      {avgPctMode === 'simple' && <Check className="h-3.5 w-3.5" />}
+                      {avgPctMode !== 'simple' && <span className="w-3.5 h-3.5" />}
+                      算术平均
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSidebarSettingsMenuOpen(false)
+                        setAvgPctModeMutation.mutate('weighted')
+                      }}
+                      disabled={setAvgPctModeMutation.isPending}
+                      className={cn(
+                        'w-full text-left px-3 py-2 text-xs hover:bg-elevated flex items-center gap-2',
+                        avgPctMode === 'weighted' ? 'text-accent bg-accent/10' : ''
+                      )}
+                    >
+                      {avgPctMode === 'weighted' && <Check className="h-3.5 w-3.5" />}
+                      {avgPctMode !== 'weighted' && <span className="w-3.5 h-3.5" />}
+                      加权平均
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
         <div className="space-y-2">
@@ -1549,7 +1692,6 @@ export function WatchlistGroups() {
                 )}
                 onClick={() => {
                   setSelectedGroupId(group.group_id);
-                  setShowGroupModal(true);
                 }}
               >
                 <span className="font-medium truncate flex-1">{group.name}</span>
@@ -1606,6 +1748,16 @@ export function WatchlistGroups() {
                   {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
                   {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
                   {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+                </button>
+                {/* 刷新按钮 */}
+                <button
+                  type="button"
+                  onClick={() => refetchAllGroupItems()}
+                  disabled={isFetchingAllGroupItems}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
+                  title="刷新板块数据"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isFetchingAllGroupItems ? 'animate-spin' : ''}`} />
                 </button>
               </div>
             </div>
@@ -1726,130 +1878,155 @@ export function WatchlistGroups() {
               {selectedGroupItemsQuery.isLoading ? (
                 <EmptyState title="加载中…" />
               ) : selectedGroupItemsQuery.data?.rows && selectedGroupItemsQuery.data.rows.length > 0 ? (
-                <div className="flex flex-col">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      {/* 视图切换按钮 */}
-                      <button
-                        onClick={toggleView}
-                        className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-                        title={viewMode === 'table' ? '卡片视图' : '列表视图'}
-                      >
-                        {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
-                      </button>
-                      <div className="w-px h-5 bg-border" />
-                      {/* 自定义列按钮 */}
-                      <button
-                        onClick={() => setCustomizerOpen(true)}
-                        className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-                        title="自定义列"
-                      >
-                        <Settings2 className="h-4 w-4" />
-                      </button>
-                      {/* 刷新按钮 */}
-                      <button
-                        onClick={() => selectedGroupItemsQuery.refetch()}
-                        disabled={selectedGroupItemsQuery.isFetching}
-                        className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
-                        title="刷新"
-                      >
-                        <RefreshCw className={`h-4 w-4 ${selectedGroupItemsQuery.isFetching ? 'animate-spin' : ''}`} />
-                      </button>
-                    </div>
-                  </div>
-                  {viewMode === 'table' ? (
-                    <StockDataTable
-                      columns={visibleColumns}
-                      rows={sortRows(selectedGroupItemsQuery.data.rows, visibleColumns)}
-                      renderCell={renderCell}
-                      headerSticky={true}
-                      rowKey={(row) => row.symbol}
-                      sort={sort}
-                      onSortToggle={handleSortToggle}
-                      renderHeaderContent={(col) => {
-                        if (col.source.type === 'builtin' && col.source.key === 'candle') {
-                          return (
-                            <span className="inline-flex items-center justify-center gap-1.5">
-                              <span>{col.label}</span>
-                              <button
-                                type="button"
-                                onClick={(event) => { event.stopPropagation(); toggleDailyKChart() }}
-                                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
-                                  dailyKChartVisible
-                                    ? 'text-accent bg-accent/10 hover:bg-accent/20'
-                                    : 'text-muted hover:text-foreground hover:bg-elevated'
-                                }`}
-                                title={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
-                                aria-label={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
-                              >
-                                {dailyKChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                              </button>
-                            </span>
-                          );
-                        }
-                        if (col.source.type === 'builtin' && col.source.key === 'intraday') {
-                          const intradayAutoRefresh = (prefsData?.minute_intraday_refresh ?? false) && realtimeRunning;
-                          return (
-                            <span className="inline-flex items-center justify-center gap-1.5">
-                              <span>{col.label}</span>
-                              <button
-                                type="button"
-                                onClick={(event) => { event.stopPropagation(); toggleIntradayChart() }}
-                                className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
-                                  intradayChartVisible
-                                    ? 'text-accent bg-accent/10 hover:bg-accent/20'
-                                    : 'text-muted hover:text-foreground hover:bg-elevated'
-                                }`}
-                                title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
-                                aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
-                              >
-                                {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
-                              </button>
-                              {/* 分时图显示 且 未开自动轮询时，提供手动刷新按钮 */}
-                              {intradayChartVisible && !intradayAutoRefresh && (
-                                <button
-                                  type="button"
-                                  onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
-                                  disabled={minuteBatch.isFetching}
-                                  className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
-                                  title="刷新分时数据"
-                                  aria-label="刷新分时数据"
-                                >
-                                  <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
-                                </button>
-                              )}
-                              {/* 自动轮询中：显示旋转图标提示正在实时刷新 */}
-                              {intradayChartVisible && intradayAutoRefresh && (
-                                <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
-                              )}
-                            </span>
-                          );
-                        }
-                        return undefined;
-                      }}
-                    />
-                  ) : (
-                    <div className={`grid gap-3 ${
-                      cardColumns === 6 ? '2xl:grid-cols-6' :
-                      cardColumns === 5 ? 'xl:grid-cols-5' :
-                      cardColumns === 4 ? 'md:grid-cols-4' :
-                      cardColumns === 3 ? 'sm:grid-cols-3' :
-                      'grid-cols-2'
-                    }`}>
-                      {selectedGroupItemsQuery.data.rows.map((row) => (
-                        <StockCard
-                          key={row.symbol}
-                          r={row}
-                          onPreview={handleCardPreview}
-                          onConfirmRemove={handleCardConfirmRemove}
-                          onCancelRemove={handleCardCancelRemove}
-                          onRequestRemove={handleCardRequestRemove}
-                          isConfirming={confirmRemove === row.symbol}
+                (() => {
+                  // Sort selected group's rows if stockSortMode is not default
+                  let sortedRows = [...selectedGroupItemsQuery.data.rows];
+                  if (stockSortMode !== 'default') {
+                    sortedRows.sort((a, b) => {
+                      const aPct = a.change_pct ?? 0;
+                      const bPct = b.change_pct ?? 0;
+                      return stockSortMode === 'descending' ? bPct - aPct : aPct - bPct;
+                    });
+                  }
+                  
+                  return (
+                    <div className="flex flex-col">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          {/* 视图切换按钮 */}
+                          <button
+                            onClick={toggleView}
+                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                            title={viewMode === 'table' ? '卡片视图' : '列表视图'}
+                          >
+                            {viewMode === 'table' ? <LayoutGrid className="h-4 w-4" /> : <List className="h-4 w-4" />}
+                          </button>
+                          {/* 个股涨跌幅排序按钮 */}
+                          <button
+                            type="button"
+                            onClick={toggleStockSortMode}
+                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                            title={stockSortMode === 'default' ? '切换到个股按涨跌幅降序排序' : stockSortMode === 'descending' ? '切换到个股按涨跌幅升序排序' : '切换到个股默认排序'}
+                          >
+                            {stockSortMode === 'default' && <ArrowUpDown className="h-4 w-4" />}
+                            {stockSortMode === 'descending' && <ArrowDown className="h-4 w-4" />}
+                            {stockSortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
+                          </button>
+                          {/* 刷新按钮 */}
+                          <button
+                            onClick={() => selectedGroupItemsQuery.refetch()}
+                            disabled={selectedGroupItemsQuery.isFetching}
+                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150 disabled:opacity-50"
+                            title="刷新"
+                          >
+                            <RefreshCw className={`h-4 w-4 ${selectedGroupItemsQuery.isFetching ? 'animate-spin' : ''}`} />
+                          </button>
+                          <div className="w-px h-5 bg-border" />
+                          {/* 自定义列按钮 */}
+                          <button
+                            onClick={() => setCustomizerOpen(true)}
+                            className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
+                            title="自定义列"
+                          >
+                            <Settings2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                      {viewMode === 'table' ? (
+                        <StockDataTable
+                          columns={visibleColumns}
+                          rows={sortRows(sortedRows, visibleColumns)}
+                          renderCell={renderCell}
+                          headerSticky={true}
+                          rowKey={(row) => row.symbol}
+                          sort={sort}
+                          onSortToggle={handleSortToggle}
+                          renderHeaderContent={(col) => {
+                            if (col.source.type === 'builtin' && col.source.key === 'candle') {
+                              return (
+                                <span className="inline-flex items-center justify-center gap-1.5">
+                                  <span>{col.label}</span>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => { event.stopPropagation(); toggleDailyKChart() }}
+                                    className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                                      dailyKChartVisible
+                                        ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                        : 'text-muted hover:text-foreground hover:bg-elevated'
+                                    }`}
+                                    title={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
+                                    aria-label={dailyKChartVisible ? '隐藏日k蜡烛' : '显示日k蜡烛'}
+                                  >
+                                    {dailyKChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                                  </button>
+                                </span>
+                              );
+                            }
+                            if (col.source.type === 'builtin' && col.source.key === 'intraday') {
+                              const intradayAutoRefresh = (prefsData?.minute_intraday_refresh ?? false) && realtimeRunning;
+                              return (
+                                <span className="inline-flex items-center justify-center gap-1.5">
+                                  <span>{col.label}</span>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => { event.stopPropagation(); toggleIntradayChart() }}
+                                    className={`inline-flex items-center justify-center w-5 h-5 rounded transition-colors ${
+                                      intradayChartVisible
+                                        ? 'text-accent bg-accent/10 hover:bg-accent/20'
+                                        : 'text-muted hover:text-foreground hover:bg-elevated'
+                                    }`}
+                                    title={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                                    aria-label={intradayChartVisible ? '隐藏分时图' : '显示分时图'}
+                                  >
+                                    {intradayChartVisible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                                  </button>
+                                  {/* 分时图显示 且 未开自动轮询时，提供手动刷新按钮 */}
+                                  {intradayChartVisible && !intradayAutoRefresh && (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => { event.stopPropagation(); minuteBatch.refetch() }}
+                                      disabled={minuteBatch.isFetching}
+                                      className="inline-flex items-center justify-center w-5 h-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors disabled:opacity-40"
+                                      title="刷新分时数据"
+                                      aria-label="刷新分时数据"
+                                    >
+                                      <RefreshCw className={`h-3.5 w-3.5 ${minuteBatch.isFetching ? 'animate-spin' : ''}`} />
+                                    </button>
+                                  )}
+                                  {/* 自动轮询中：显示旋转图标提示正在实时刷新 */}
+                                  {intradayChartVisible && intradayAutoRefresh && (
+                                    <RefreshCw className="h-3 w-3 text-accent/60 animate-spin" aria-label="实时刷新中" />
+                                  )}
+                                </span>
+                              );
+                            }
+                            return undefined;
+                          }}
                         />
-                      ))}
+                      ) : (
+                        <div className={`grid gap-3 ${
+                          cardColumns === 6 ? '2xl:grid-cols-6' :
+                          cardColumns === 5 ? 'xl:grid-cols-5' :
+                          cardColumns === 4 ? 'md:grid-cols-4' :
+                          cardColumns === 3 ? 'sm:grid-cols-3' :
+                          'grid-cols-2'
+                        }`}>
+                          {sortedRows.map((row) => (
+                            <StockCard
+                              key={row.symbol}
+                              r={row}
+                              onPreview={handleCardPreview}
+                              onConfirmRemove={handleCardConfirmRemove}
+                              onCancelRemove={handleCardCancelRemove}
+                              onRequestRemove={handleCardRequestRemove}
+                              isConfirming={confirmRemove === row.symbol}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  )
+                })()
               ) : (
                 <EmptyState title="该板块暂无股票" />
               )}
@@ -1862,37 +2039,6 @@ export function WatchlistGroups() {
 
   return (
     <div className="h-full">
-      <div className="border-b border-border px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          {/* 列表/卡片视图切换（保留原有功能） */}
-          <div className="inline-flex rounded-btn border border-border overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setSidebarOrCardsViewMutation.mutate('sidebar')}
-              disabled={setSidebarOrCardsViewMutation.isPending}
-              className={cn(
-                'px-3 py-1 text-xs transition-colors flex items-center gap-1',
-                sidebarOrCardsView === 'sidebar' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
-              )}
-            >
-              <List className="h-3.5 w-3.5" />
-              列表
-            </button>
-            <button
-              type="button"
-              onClick={() => setSidebarOrCardsViewMutation.mutate('cards')}
-              disabled={setSidebarOrCardsViewMutation.isPending}
-              className={cn(
-                'px-3 py-1 text-xs transition-colors flex items-center gap-1',
-                sidebarOrCardsView === 'cards' ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated/50'
-              )}
-            >
-              <Grid className="h-3.5 w-3.5" />
-              卡片
-            </button>
-          </div>
-        </div>
-      </div>
       {sidebarOrCardsView === 'sidebar' ? renderSidebarView() : renderCardsView()}
 
       {createDialogOpen && (
