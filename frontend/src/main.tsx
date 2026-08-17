@@ -4,6 +4,10 @@ import { RouterProvider } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, QueryCache } from '@tanstack/react-query'
 import { router } from './router'
 import './index.css'
+import { initPriceColors } from './lib/priceColors'
+
+// 初始化价格颜色
+initPriceColors()
 
 // 全局认证拦截: 任何 query/mutation 收到 401 (未登录/会话过期) → 跳登录页。
 // api.ts 的 request() 已对 401 静默 (不弹 toast), 这里统一负责跳转。

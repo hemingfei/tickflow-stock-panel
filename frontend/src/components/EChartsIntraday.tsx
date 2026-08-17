@@ -6,13 +6,40 @@ import { useChartTheme, type ChartTheme } from '@/lib/theme'
 
 type YMode = 'adaptive' | 'limit'
 
-// 序列颜色 (双主题通用); 画布轴/网格/十字线等主题相关色走 ChartTheme
-const THEME = {
-  line: '#3B82F6',
-  areaFill: 'rgba(59,130,246,0.40)',
-  avgLine: '#F59E0B',
-  volUp: 'rgba(240,68,56,0.6)',
-  volDown: 'rgba(18,183,106,0.6)',
+import { getPriceColors, usePriceColors, parseHsl, hslToHex } from '@/lib/priceColors'
+
+// 获取动态主题颜色
+function getTHEME() {
+  const priceColors = getPriceColors()
+  const bullHsl = parseHsl(priceColors.bull)
+  const bearHsl = parseHsl(priceColors.bear)
+  
+  const bullHex = bullHsl ? hslToHex(bullHsl.h, bullHsl.s, bullHsl.l) : '#C74040'
+  const bearHex = bearHsl ? hslToHex(bearHsl.h, bearHsl.s, bearHsl.l) : '#2D9B65'
+  
+  // 将 hex 转换为 rgba 带透明度
+  const bullRgb = hexToRgb(bullHex)
+  const bearRgb = hexToRgb(bearHex)
+  
+  return {
+    line: '#3B82F6',
+    areaFill: 'rgba(59,130,246,0.40)',
+    avgLine: '#F59E0B',
+    volUp: bullRgb ? `rgba(${bullRgb.r},${bullRgb.g},${bullRgb.b},0.6)` : 'rgba(240,68,56,0.6)',
+    volDown: bearRgb ? `rgba(${bearRgb.r},${bearRgb.g},${bearRgb.b},0.6)` : 'rgba(18,183,106,0.6)',
+    bull: bullHex,
+    bear: bearHex,
+  }
+}
+
+// hex 转 rgb 辅助函数
+function hexToRgb(hex: string) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16),
+  } : null
 }
 
 interface Props {
@@ -110,6 +137,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   const avgData = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
   const volumes = new Array(FULL_DAY_TIMES.length).fill(null) as (any | null)[]
 
+  const THEME = getTHEME()
   const volNeutral = 'rgba(161,161,170,0.5)'
   for (let i = 0; i < data.length; i++) {
     const timeKey = fmtTime(data[i].datetime)
@@ -172,16 +200,21 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
       yMin = prevClose - maxDiff
       yMax = prevClose + maxDiff
       // 加 markLine 标注涨停价和跌停价 (仅虚线, 不显示文字)
+      // 将 THEME.bull 和 THEME.bear 转换为带透明度的颜色
+      const bullRgb = hexToRgb(THEME.bull)
+      const bearRgb = hexToRgb(THEME.bear)
+      const bullAlpha = bullRgb ? `rgba(${bullRgb.r},${bullRgb.g},${bullRgb.b},0.4)` : 'rgba(199,64,64,0.4)'
+      const bearAlpha = bearRgb ? `rgba(${bearRgb.r},${bearRgb.g},${bearRgb.b},0.4)` : 'rgba(45,155,101,0.4)'
       markLineData.push(
         {
           yAxis: limitUp,
-          lineStyle: { color: 'rgba(199,64,64,0.4)', type: 'dashed', width: 1 },
+          lineStyle: { color: bullAlpha, type: 'dashed', width: 1 },
           label: { show: false },
           symbol: 'none',
         },
         {
           yAxis: limitDown,
-          lineStyle: { color: 'rgba(45,155,101,0.4)', type: 'dashed', width: 1 },
+          lineStyle: { color: bearAlpha, type: 'dashed', width: 1 },
           label: { show: false },
           symbol: 'none',
         },
@@ -384,7 +417,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
         smooth: false,
         symbol: 'none',
         cursor: 'crosshair',
-        lineStyle: { width: 1, color: THEME.avgLine },
+        lineStyle: { width: 1, color: getTHEME().avgLine },
         connectNulls: true,
       }] : []),
       {
@@ -414,14 +447,18 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
   const [infoIdx, setInfoIdx] = useState(data.length - 1)
   const [yMode, setYMode] = useState<YMode>('adaptive')
   const ct = useChartTheme()
+  const priceColors = usePriceColors()
   const avgPrices = useMemo(() => computeAvgPrice(data), [data])
 
   // 分时线颜色：基于最新价 vs 昨收
+  const THEME = getTHEME()
   const lastClose = data.length > 0 ? data[data.length - 1].close : null
   const lineIsUp = lastClose != null && prevClose != null ? lastClose > prevClose : true
   const lineIsFlat = lastClose != null && prevClose != null ? lastClose === prevClose : false
-  const lineColor = lineIsFlat ? '#A1A1AA' : lineIsUp ? '#C74040' : '#2D9B65'
-  const areaFill = lineIsFlat ? 'rgba(180,180,190,0.40)' : lineIsUp ? 'rgba(199,64,64,0.40)' : 'rgba(34,197,94,0.40)'
+  const lineColor = lineIsFlat ? '#A1A1AA' : lineIsUp ? THEME.bull : THEME.bear
+  // 转换为带透明度的颜色
+  const lineRgb = hexToRgb(lineColor)
+  const areaFill = lineIsFlat ? 'rgba(180,180,190,0.40)' : lineRgb ? `rgba(${lineRgb.r},${lineRgb.g},${lineRgb.b},0.40)` : 'rgba(199,64,64,0.40)'
 
   useEffect(() => {
     setInfoIdx(data.length - 1)
@@ -492,7 +529,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
     } else {
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine])
+  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceColors])
 
   useEffect(() => {
     return () => {
@@ -512,7 +549,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
   const chg = d && prevClose != null ? d.close - prevClose : null
   const isUp = chg != null ? chg > 0 : true
   const isFlat = chg != null ? chg === 0 : false
-  const priceClr = isFlat ? '#A1A1AA' : isUp ? '#C74040' : '#2D9B65'
+  const priceClr = isFlat ? '#A1A1AA' : isUp ? THEME.bull : THEME.bear
 
   return (
     <div className="w-full">
@@ -569,8 +606,8 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
                 <span style={{ color: priceClr }}>{d.close.toFixed(2)}</span>
               </span>
               {showAvgLine && <span className="flex items-center gap-x-1">
-                <span style={{ display: 'inline-block', width: 14, height: 2, background: THEME.avgLine }} />
-                <span style={{ color: THEME.avgLine }}>{avg?.toFixed(2)}</span>
+                <span style={{ display: 'inline-block', width: 14, height: 2, background: getTHEME().avgLine }} />
+                <span style={{ color: getTHEME().avgLine }}>{avg?.toFixed(2)}</span>
               </span>}
               <span className="text-muted">量</span>
               <span className="text-secondary">{d.volume.toFixed(0)}</span>

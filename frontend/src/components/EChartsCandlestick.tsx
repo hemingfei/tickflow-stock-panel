@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { chartTheme, getTheme, useTheme } from '@/lib/theme'
+import { getPriceColors, usePriceColors, hslToHex, parseHsl } from '@/lib/priceColors'
 import * as echarts from 'echarts'
 import type { ECharts, EChartsOption } from 'echarts'
 
@@ -138,11 +139,12 @@ export const SUB_CHARTS: SubChartDef[] = [
           type: 'bar',
           data: data.map((d, index) => {
             const ratio = volumeRatioAt(data, index, compareDays)
+            const THEME = getTHEME()
             return {
               value: d.volume ?? 0,
               volumeRatioLabel: ratio == null ? '' : fmtVolumeRatio(ratio, 1),
               itemStyle: {
-                color: d.close >= d.open ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)',
+                color: d.close >= d.open ? THEME.bullAlpha : THEME.bearAlpha,
               },
             }
           }),
@@ -179,8 +181,9 @@ export const SUB_CHARTS: SubChartDef[] = [
     },
     buildInfo: (d) => {
       if (!d) return []
+      const THEME = getTHEME()
       return [
-        { label: '量', color: d.close >= d.open ? '#C74040' : '#2D9B65', value: fmtVol(d.volume) },
+        { label: '量', color: d.close >= d.open ? THEME.bull : THEME.bear, value: fmtVol(d.volume) },
       ]
     },
   },
@@ -205,27 +208,29 @@ export const SUB_CHARTS: SubChartDef[] = [
         lineStyle: { width: 1, color: '#8B5CF6' },
         itemStyle: { color: '#8B5CF6' },
       },
-      {
-        name: 'MACD',
-        type: 'bar',
-        data: data.map(d => {
-          const v = d.macd_hist
-          if (v == null) return '-'
-          return {
-            value: Number(v),
-            itemStyle: { color: Number(v) >= 0 ? 'rgba(240,68,56,0.6)' : 'rgba(18,183,106,0.6)' },
-          }
-        }),
-        barWidth: '40%',
-        animation: false,
-      },
+        {
+          name: 'MACD',
+          type: 'bar',
+          data: data.map(d => {
+            const v = d.macd_hist
+            if (v == null) return '-'
+            const THEME = getTHEME()
+            return {
+              value: Number(v),
+              itemStyle: { color: Number(v) >= 0 ? THEME.bullAlpha : THEME.bearAlpha },
+            }
+          }),
+          barWidth: '40%',
+          animation: false,
+        },
     ],
     buildInfo: (d) => {
       if (!d) return []
+      const THEME = getTHEME()
       return [
         { label: 'DIF', color: '#FACC15', value: d.macd_dif != null ? d.macd_dif.toFixed(3) : '—' },
         { label: 'DEA', color: '#8B5CF6', value: d.macd_dea != null ? d.macd_dea.toFixed(3) : '—' },
-        { label: 'MACD', color: d.macd_hist != null && d.macd_hist >= 0 ? '#C74040' : '#2D9B65', value: d.macd_hist != null ? d.macd_hist.toFixed(3) : '—' },
+        { label: 'MACD', color: d.macd_hist != null && d.macd_hist >= 0 ? THEME.bull : THEME.bear, value: d.macd_hist != null ? d.macd_hist.toFixed(3) : '—' },
       ]
     },
   },
@@ -341,16 +346,39 @@ interface Props {
 }
 
 // 序列颜色 (双主题通用); 画布轴/网格/文字等主题相关色走 CT() 动态取
-const THEME = {
-  bull: '#C74040',
-  bear: '#2D9B65',
-  bullAlpha: 'rgba(240,68,56,0.7)',
-  bearAlpha: 'rgba(18,183,106,0.7)',
-  ma5: '#A1A1AA',
-  ma10: '#3B82F6',
-  ma20: '#F97316',
-  ma60: '#8B5CF6',
-  bg: 'transparent',
+function getTHEME() {
+  const priceColors = getPriceColors()
+  const bullHsl = parseHsl(priceColors.bull)
+  const bearHsl = parseHsl(priceColors.bear)
+  
+  const bullHex = bullHsl ? hslToHex(bullHsl.h, bullHsl.s, bullHsl.l) : '#C74040'
+  const bearHex = bearHsl ? hslToHex(bearHsl.h, bearHsl.s, bearHsl.l) : '#2D9B65'
+  
+  // 将 hex 转换为 rgba 带透明度
+  const bullRgb = hexToRgb(bullHex)
+  const bearRgb = hexToRgb(bearHex)
+  
+  return {
+    bull: bullHex,
+    bear: bearHex,
+    bullAlpha: bullRgb ? `rgba(${bullRgb.r},${bullRgb.g},${bullRgb.b},0.6)` : 'rgba(240,68,56,0.6)',
+    bearAlpha: bearRgb ? `rgba(${bearRgb.r},${bearRgb.g},${bearRgb.b},0.6)` : 'rgba(18,183,106,0.6)',
+    ma5: '#A1A1AA',
+    ma10: '#3B82F6',
+    ma20: '#F97316',
+    ma60: '#8B5CF6',
+    bg: 'transparent',
+  }
+}
+
+// hex 转 rgb 辅助函数
+function hexToRgb(hex: string) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16),
+  } : null
 }
 
 /** 当前主题的图表调色板 (buildOption/信息栏在渲染时调用; 主题切换由组件 effect 触发重建)。 */
@@ -391,14 +419,15 @@ function buildSubInfoGraphics(
       const vol10 = calcVolMa(10)
       items.push({ label: 'VOL5', color: '#FACC15', value: fmtVol(vol5) })
       items.push({ label: 'VOL10', color: '#8B5CF6', value: fmtVol(vol10) })
-      if (volumeCompare.enabled) {
-        const ratio = volumeRatioAt(data, infoIdx, volumeCompare.days)
-        items.push({
-          label: `量比${volumeCompare.days}`,
-          color: ratio != null && ratio >= 1 ? '#C74040' : '#2D9B65',
-          value: fmtVolumeRatio(ratio),
-        })
-      }
+        if (volumeCompare.enabled) {
+          const ratio = volumeRatioAt(data, infoIdx, volumeCompare.days)
+          const THEME = getTHEME()
+          items.push({
+            label: `量比${volumeCompare.days}`,
+            color: ratio != null && ratio >= 1 ? THEME.bull : THEME.bear,
+            value: fmtVolumeRatio(ratio),
+          })
+        }
     }
 
     // 每个元素加固定 id，确保 ECharts 增量更新时能正确匹配
@@ -515,7 +544,7 @@ function buildOption(
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: isBuy ? getTHEME().bull : isSell ? getTHEME().bear : CT().text },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -645,6 +674,7 @@ function buildOption(
     })
   }
 
+  const THEME = getTHEME()
   series.push({
     name: 'K', type: 'candlestick', data: candleData,
     animation: false,
@@ -801,8 +831,9 @@ export function EChartsCandlestick({
   dataRef.current = data
   const onDateClickRef = useRef(onDateClick)
   onDateClickRef.current = onDateClick
-  // 主题: buildOption/信息栏内部通过 CT() 动态取调色板, 这里只负责切换时触发重建
+  // 主题和价格颜色: 切换时触发重建
   const theme = useTheme()
+  const priceColors = usePriceColors()
 
   // --- 全部用 ref，避免高频交互触发 React 重渲染 ---
   const infoIdxRef = useRef<number>(data.length - 1)
@@ -883,6 +914,7 @@ export function EChartsCandlestick({
     const prev = idx > 0 ? data[idx - 1] : null
     const chg = prev ? d.close - prev.close : 0
     const isUp = chg >= 0
+    const THEME = getTHEME()
     const clr = isUp ? THEME.bull : THEME.bear
     const floatShares = stockInfo?.float_shares
     const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
@@ -1056,7 +1088,7 @@ export function EChartsCandlestick({
           symbol: 'arrow', symbolSize: 12,
           symbolRotate: isBuy ? 0 : 180,
           symbolOffset: isBuy ? [0, '60%'] : [0, '-60%'],
-          itemStyle: { color: isBuy ? THEME.bull : isSell ? THEME.bear : CT().text },
+          itemStyle: { color: isBuy ? getTHEME().bull : isSell ? getTHEME().bear : CT().text },
           label: {
             show: !!m.label, formatter: m.label ?? '',
             position: isBuy ? 'bottom' : 'top', distance: 8,
@@ -1113,13 +1145,14 @@ export function EChartsCandlestick({
     if (infoEl) {
       infoEl.innerHTML = getInfoBarHTML()
     }
-  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme])
+  }, [data, markers, ranges, priceLines, linkedPrice, showMA, showMarkersProp, activeIndicators, volumeCompare, chartHeight, dates, dateIndexMap, initialZoom, getInfoBarHTML, theme, priceColors])
 
   // 渲染信息栏容器 (内容由 JS 直接写入)
   const initialHTML = useMemo(() => {
     const idx = data.length - 1
     const d = idx >= 0 && idx < data.length ? data[idx] : null
     if (!d) return ''
+    const THEME = getTHEME()
     const floatShares = stockInfo?.float_shares
     const turnoverRate = floatShares && d.volume ? (d.volume * 100 / floatShares * 100) : null
     let html = `<div style="display:flex;align-items:center;gap:6px;padding:0 8px;font:11px 'JetBrains Mono',monospace;height:20px;flex-wrap:wrap">`

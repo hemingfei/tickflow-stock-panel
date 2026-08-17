@@ -138,4 +138,7 @@ export const storage = {
 
   /** 自选分组列表分时图显示状态 */
   watchlistGroupsIntraday: kv<boolean>('watchlist_groups_showIntraday'),
+
+  /** 涨跌颜色配置 (HSL 格式) */
+  priceColors: kv<{ bull?: string; bear?: string }>('price_colors'),
 } as const

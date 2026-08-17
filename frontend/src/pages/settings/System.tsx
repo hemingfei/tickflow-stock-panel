@@ -5,7 +5,7 @@
  */
 import { useState, useCallback, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, Palette, RotateCcw } from 'lucide-react'
 import { usePreferences, useVersion } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -15,12 +15,63 @@ import { SOUND_OPTIONS, previewSound } from '@/lib/notificationSound'
 import {
   listZhVoices, previewVoice, activateVoice, getCurrentVoiceURI,
 } from '@/lib/voiceBroadcast'
+import {
+  usePriceColors,
+  setPriceColors,
+  resetPriceColors,
+  parseHsl,
+  stringifyHsl,
+  hslToHex,
+  hexToHsl,
+  DEFAULT_BULL,
+  DEFAULT_BEAR,
+} from '@/lib/priceColors'
 
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
   const { data: prefs } = usePreferences()
   const { data: versionData } = useVersion()
   const [saving, setSaving] = useState(false)
+  const priceColors = usePriceColors()
+  
+  // 颜色选择器状态
+  const [bullHex, setBullHex] = useState(() => {
+    const hsl = parseHsl(priceColors.bull)
+    return hsl ? hslToHex(hsl.h, hsl.s, hsl.l) : '#F04438'
+  })
+  const [bearHex, setBearHex] = useState(() => {
+    const hsl = parseHsl(priceColors.bear)
+    return hsl ? hslToHex(hsl.h, hsl.s, hsl.l) : '#12B76A'
+  })
+
+  // 应用颜色
+  const applyColors = useCallback(() => {
+    const bullHsl = hexToHsl(bullHex)
+    const bearHsl = hexToHsl(bearHex)
+    if (bullHsl && bearHsl) {
+      setPriceColors({
+        bull: stringifyHsl(bullHsl.h, bullHsl.s, bullHsl.l),
+        bear: stringifyHsl(bearHsl.h, bearHsl.s, bearHsl.l),
+      })
+    }
+  }, [bullHex, bearHex])
+
+  // 重置颜色
+  const handleResetColors = useCallback(() => {
+    resetPriceColors()
+    const bullHsl = parseHsl(DEFAULT_BULL)
+    const bearHsl = parseHsl(DEFAULT_BEAR)
+    if (bullHsl) setBullHex(hslToHex(bullHsl.h, bullHsl.s, bullHsl.l))
+    if (bearHsl) setBearHex(hslToHex(bearHsl.h, bearHsl.s, bearHsl.l))
+  }, [])
+
+  // 当颜色从外部变化时更新状态
+  useEffect(() => {
+    const bullHsl = parseHsl(priceColors.bull)
+    const bearHsl = parseHsl(priceColors.bear)
+    if (bullHsl) setBullHex(hslToHex(bullHsl.h, bullHsl.s, bullHsl.l))
+    if (bearHsl) setBearHex(hslToHex(bearHsl.h, bearHsl.s, bearHsl.l))
+  }, [priceColors])
 
   const screenerAutoRun = prefs?.screener_auto_run ?? true
   const [clearing, setClearing] = useState(false)
@@ -286,6 +337,84 @@ export function SettingsSystemPanel() {
             <span className="text-xs text-muted w-8 text-right">{voiceRate.toFixed(1)}</span>
           </div>
         </div>
+      </section>
+
+      <section className="rounded-card border border-border bg-surface p-5 mt-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Palette className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">涨跌颜色</h3>
+        </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4 py-2">
+              <div className="min-w-0">
+                <div className="text-sm text-foreground">涨颜色</div>
+                <div className="text-[11px] text-muted truncate">设置价格上涨时显示的颜色</div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="relative">
+                  <div
+                    className="w-8 h-8 rounded-full border border-border shadow-sm cursor-pointer hover:scale-105 transition-transform"
+                    style={{ backgroundColor: bullHex }}
+                  />
+                  <input
+                    type="color"
+                    value={bullHex}
+                    onChange={(e) => setBullHex(e.target.value)}
+                    onBlur={applyColors}
+                    className="w-8 h-8 opacity-0 absolute top-0 left-0 cursor-pointer"
+                  />
+                </div>
+                <input
+                  type="text"
+                  value={bullHex}
+                  onChange={(e) => setBullHex(e.target.value)}
+                  onBlur={applyColors}
+                  className="w-20 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 py-2">
+              <div className="min-w-0">
+                <div className="text-sm text-foreground">跌颜色</div>
+                <div className="text-[11px] text-muted truncate">设置价格下跌时显示的颜色</div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="relative">
+                  <div
+                    className="w-8 h-8 rounded-full border border-border shadow-sm cursor-pointer hover:scale-105 transition-transform"
+                    style={{ backgroundColor: bearHex }}
+                  />
+                  <input
+                    type="color"
+                    value={bearHex}
+                    onChange={(e) => setBearHex(e.target.value)}
+                    onBlur={applyColors}
+                    className="w-8 h-8 opacity-0 absolute top-0 left-0 cursor-pointer"
+                  />
+                </div>
+                <input
+                  type="text"
+                  value={bearHex}
+                  onChange={(e) => setBearHex(e.target.value)}
+                  onBlur={applyColors}
+                  className="w-20 h-8 px-1.5 rounded-btn border border-border bg-base text-xs text-foreground font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-border/50">
+              <button
+                onClick={handleResetColors}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-btn text-xs
+                           bg-elevated text-secondary hover:text-foreground transition-colors shrink-0"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                恢复默认颜色
+              </button>
+            </div>
+          </div>
       </section>
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">
