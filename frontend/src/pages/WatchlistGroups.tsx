@@ -725,9 +725,13 @@ export function WatchlistGroups() {
       api.watchlistGroups.addItem(groupId, symbol),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
-        queryClient.invalidateQueries({ queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId) })
+        // 使用前缀匹配失效所有该 group 的 enriched 查询（不管 ext 参数是什么）
+        queryClient.invalidateQueries({ 
+          queryKey: ['watchlist-group-items-enriched', selectedGroupId] 
+        })
       }
       toast("股票添加成功")
     },
@@ -739,9 +743,13 @@ export function WatchlistGroups() {
       api.watchlistGroups.removeItem(groupId, symbol),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
-        queryClient.invalidateQueries({ queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId) })
+        // 使用前缀匹配失效所有该 group 的 enriched 查询（不管 ext 参数是什么）
+        queryClient.invalidateQueries({ 
+          queryKey: ['watchlist-group-items-enriched', selectedGroupId] 
+        })
       }
       toast("股票移除成功")
     },
@@ -753,9 +761,13 @@ export function WatchlistGroups() {
       api.watchlistGroups.reorderItems(groupId, symbols),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
-        queryClient.invalidateQueries({ queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId) })
+        // 使用前缀匹配失效所有该 group 的 enriched 查询（不管 ext 参数是什么）
+        queryClient.invalidateQueries({ 
+          queryKey: ['watchlist-group-items-enriched', selectedGroupId] 
+        })
       }
     },
     onError: (e: any) => toast(e.message || "置顶失败", "error"),
