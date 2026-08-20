@@ -28,14 +28,6 @@ const EMOTION_COLORS: Record<string, string> = {
   '冰点': '#10b981',
 }
 
-/** 综合分 → 情绪标签映射(与后端 sentiment_builder 一致: 70/55/45/30) */
-function scoreToEmotionLabel(score: number): string {
-  if (score >= 70) return '强势'
-  if (score >= 55) return '偏暖'
-  if (score >= 45) return '震荡'
-  if (score >= 30) return '偏冷'
-  return '冰点'
-}
 
 /** 综合分 → 对应颜色(与情绪标签一致阈值: 70/55/45/30) */
 function scoreToColor(score: number): string {
@@ -307,7 +299,7 @@ export function EmotionCycle() {
           { name: '主线', max: 100 },
         ],
         axisName: { color: ct.text, fontSize: 11 },
-        splitArea: { areaStyle: { color: [ct.bg, ct.bgAlt] } },
+        splitArea: { areaStyle: { color: ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.04)'] } },
         axisLine: { lineStyle: { color: ct.grid } },
         splitLine: { lineStyle: { color: ct.grid } },
       },
