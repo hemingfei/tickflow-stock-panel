@@ -491,6 +491,45 @@ export interface RegimeCoverage {
   latest_date: string | null
 }
 
+// ===== 情绪周期(Sentiment) =====
+export interface SentimentRow {
+  date: string
+  avg_index_pct: number
+  up_pct: number
+  avg_pct: number
+  median_pct: number
+  strong_diff_pct: number
+  avg_vol_ratio: number
+  high_vol_pct: number
+  limit_up: number
+  seal_rate: number
+  max_boards: number
+  tier2_count: number
+  down_pct: number
+  strong_down_pct: number
+  mainline_avg: number
+  mainline_cover_pct: number
+  index_score: number
+  profit_score: number
+  money_score: number
+  speculation_score: number
+  resilience_score: number
+  mainline_score: number
+  emotion_score: number
+  emotion_label: string
+}
+
+export interface SentimentHistory {
+  rows: SentimentRow[]
+  total: number
+}
+
+export interface SentimentCoverage {
+  rows: number
+  earliest_date: string | null
+  latest_date: string | null
+}
+
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
   id: string
@@ -1727,6 +1766,29 @@ export const api = {
     if (end) params.set('end', end)
     const qs = params.toString()
     return request<{ ok: boolean; computed: number }>(`/api/regime/recompute${qs ? `?${qs}` : ''}`, { method: 'POST' })
+  },
+
+  // 情绪周期(Sentiment)
+  sentimentHistory: (start?: string, end?: string, limit?: number) => {
+    const params = new URLSearchParams()
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    if (limit) params.set('limit', String(limit))
+    const qs = params.toString()
+    return request<SentimentHistory>(`/api/sentiment/history${qs ? `?${qs}` : ''}`)
+  },
+  sentimentLatest: () => request<{ row: SentimentRow | null }>('/api/sentiment/latest'),
+  sentimentCoverage: () => request<SentimentCoverage>('/api/sentiment/coverage'),
+  sentimentRecompute: (start?: string, end?: string) => {
+    const params = new URLSearchParams()
+    if (start) params.set('start', start)
+    if (end) params.set('end', end)
+    const qs = params.toString()
+    return request<{ ok: boolean; computed: number }>(`/api/sentiment/recompute${qs ? `?${qs}` : ''}`, { method: 'POST' })
+  },
+
+  sentimentRefresh: () => {
+    return request<{ ok: boolean; computed: number }>('/api/sentiment/refresh', { method: 'POST' })
   },
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {

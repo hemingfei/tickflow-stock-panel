@@ -289,13 +289,39 @@ def get_regime_batch_days() -> int:
 def get_regime_warmup_days() -> int:
     """regime 分批每批的 warmup 前缀日历天数。默认 40。
 
-    用于预热 ma20 等滚动窗口指标, 使每批边界计算正确。必须 > 20 交易日。
+    用于预热 ma20 等滚动窗口指标，使每批边界计算正确。必须 > 20 交易日。
     """
     v = load().get("regime_warmup_days", 40)
     try:
         return max(_REGIME_WARMUP_DAYS_MIN, min(_REGIME_WARMUP_DAYS_MAX, int(v)))
     except (TypeError, ValueError):
         return 40
+
+
+def get_pipeline_sentiment_enabled() -> bool:
+    """盘后管道是否自动计算情绪周期(sentiment)。默认 False。
+
+    sentiment 是本地聚合计算(非拉取), 首次/sentiment 表为空时需全量回填
+    多日, 内存与耗时较高, 故默认关闭; 用户可在数据页「情绪周期」卡片设置里开启,
+    或直接在该页面点「重算」手动触发(不受此开关影响)。
+    """
+    return load().get("pipeline_sentiment_enabled", False)
+
+
+_SENTIMENT_BATCH_DAYS_MIN = 25
+_SENTIMENT_BATCH_DAYS_MAX = 500
+
+
+def get_sentiment_batch_days() -> int:
+    """sentiment 全量回填每批目标交易日数。默认 60(约一季度)。
+
+    超过此天数的范围会被切成多批, 每批独立算指标后拼接, 控制内存峰值。
+    """
+    v = load().get("sentiment_batch_days", 60)
+    try:
+        return max(_SENTIMENT_BATCH_DAYS_MIN, min(_SENTIMENT_BATCH_DAYS_MAX, int(v)))
+    except (TypeError, ValueError):
+        return 60
 
 
 _PIPELINE_PULL_KEYS = ("pipeline_pull_etf", "pipeline_pull_index")

@@ -542,6 +542,32 @@ def run_now(
             stage_errors.append(f"compute_regime: {e}")
             skipped.append("regime")
 
+    # Step 2.7: 情绪周期(sentiment) 增量计算 — enriched 已就绪后聚合情绪指标。
+    # 双检测(缺口+stale), 自动补算遗漏/被覆写的日。软失败: 不阻断主管道。
+    # 默认关闭: sentiment 是本地聚合计算(非拉取), 首次/sentiment 表为空时需全量回填
+    # 多日, 内存与耗时较高。用户可在数据页「情绪周期」卡片设置里开启自动计算,
+    # 或直接在该页面点「重算」手动触发(不受此开关影响)。
+    sentiment_days = 0
+    from app.services import preferences as _prefs_sentiment
+    if not _prefs_sentiment.get_pipeline_sentiment_enabled():
+        skipped.append("sentiment")
+        logger.info("compute_sentiment skipped: user disabled (pipeline_sentiment_enabled=False)")
+    else:
+        try:
+            emit("compute_sentiment", 92, "计算情绪周期…")
+            from app.services import sentiment_builder
+            from app.api.sentiment import invalidate_sentiment_cache
+            new_sentiment = sentiment_builder.compute_sentiment_incremental(repo, repo.store.data_dir)
+            sentiment_days = new_sentiment.height if not new_sentiment.is_empty() else 0
+            if sentiment_days:
+                invalidate_sentiment_cache()
+                logger.info("compute_sentiment: %d days", sentiment_days)
+            emit("compute_sentiment", 94, f"情绪周期 {sentiment_days} 天")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("compute_sentiment failed (soft): %s", e)
+            stage_errors.append(f"compute_sentiment: {e}")
+            skipped.append("sentiment")
+
     # Step 3: 刷新视图
     emit("refresh_views", 95, "刷新 DuckDB 视图…")
     _refresh_views(repo)
@@ -561,6 +587,7 @@ def run_now(
         "etf_adj_factor_symbols": etf_adj_symbols,
         "minute_rows": written_minute,
         "regime_days": regime_days,
+        "sentiment_days": sentiment_days,
         "lagging_symbols": len(lagging_symbols),
         "skipped_stages": skipped,
         "stage_errors": stage_errors,

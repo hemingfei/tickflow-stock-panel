@@ -47,6 +47,7 @@ import {
   Moon,
   X,
   WifiOff,
+  Activity,
 } from 'lucide-react'
 import { Logo } from './Logo'
 import { api, type IndexQuote } from '@/lib/api'
@@ -80,6 +81,7 @@ const nav = [
   { to: '/financials', label: '财务分析', icon: FileText },
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/regime', label: '市场环境', icon: Gauge, badge: 'beta' },
+  { to: '/emotion-cycle', label: '情绪周期', icon: Activity, badge: 'beta' },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/data',       label: '数据',   icon: Database },
