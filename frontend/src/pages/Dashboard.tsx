@@ -302,7 +302,12 @@ function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score:
   const cy = size / 2
   const maxR = 78
   const color = scoreColor(score)
+  const [isHovering, setIsHovering] = useState(false)
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
+  const containerRef = useRef<HTMLDivElement>(null)
+  
   if (!radar.length) return <div className="flex h-52 items-center justify-center text-xs text-muted">暂无雷达数据</div>
+  
   const points = radar.map((r, i) => {
     const angle = -Math.PI / 2 + i * 2 * Math.PI / radar.length
     const radius = maxR * Math.max(0, Math.min(100, r.value)) / 100
@@ -316,6 +321,7 @@ function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score:
       gy: cy + Math.sin(angle) * maxR,
     }
   })
+  
   const polygon = points.map(p => `${p.x},${p.y}`).join(' ')
   const gridPolygons = [1, 0.66, 0.33].map((level, idx) => ({
     level,
@@ -325,9 +331,27 @@ function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score:
       return `${cx + Math.cos(angle) * maxR * level},${cy + Math.sin(angle) * maxR * level}`
     }).join(' '),
   }))
+  
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      setMousePos({
+        x: e.clientX - rect.left + 15,
+        y: e.clientY - rect.top + 15
+      })
+    }
+  }
+  
   return (
-    <div className="flex justify-center">
-      <svg viewBox={`0 0 ${size} ${size}`} className="h-56 w-full">
+    <div ref={containerRef} className="flex justify-center relative">
+      <svg 
+        viewBox={`0 0 ${size} ${size}`} 
+        className="h-56 w-full"
+        style={{ cursor: 'default' }}
+        onMouseEnter={() => setIsHovering(true)}
+        onMouseLeave={() => setIsHovering(false)}
+        onMouseMove={handleMouseMove}
+      >
         <defs>
           <radialGradient id="emotionRadarFill" cx="50%" cy="45%" r="70%">
             <stop offset="0%" stopColor={`${color}57`} />
@@ -351,13 +375,52 @@ function EmotionRadar({ radar, score }: { radar: OverviewMarket['radar']; score:
         ))}
         {points.map(p => <line key={p.key} x1={cx} y1={cy} x2={p.gx} y2={p.gy} stroke="hsl(var(--border) / 0.4)" />)}
         <polygon points={polygon} fill="url(#emotionRadarFill)" stroke={color} strokeWidth="2" />
-        {points.map(p => <circle key={p.key} cx={p.x} cy={p.y} r="2.8" fill={color} stroke="hsl(var(--surface) / 0.9)" strokeWidth="1" />)}
+        {points.map(p => (
+          <circle 
+            key={p.key} 
+            cx={p.x} 
+            cy={p.y} 
+            r={isHovering ? "4.5" : "2.8"} 
+            fill={color} 
+            stroke="hsl(var(--surface) / 0.9)" 
+            strokeWidth="1.5"
+            style={{ transition: 'r 0.15s ease-out' }}
+          />
+        ))}
         <circle cx={cx} cy={cy} r="29" fill="url(#emotionRadarCenter)" />
         <text x={cx} y={cy + 7} textAnchor="middle" className="fill-foreground font-mono text-[24px] font-bold">{score}</text>
         {points.map(p => (
-          <text key={`${p.key}-label`} x={p.lx} y={p.ly + 4} textAnchor="middle" className="fill-secondary text-[10px] font-medium">{p.label}</text>
+          <text 
+            key={`${p.key}-label`}
+            x={p.lx} 
+            y={p.ly + 4} 
+            textAnchor="middle" 
+            className="fill-secondary text-[10px] font-medium"
+          >
+            {p.label}
+          </text>
         ))}
       </svg>
+      {isHovering && (
+        <div 
+          className="absolute px-3 py-2 rounded-lg bg-surface/98 border border-border shadow-lg backdrop-blur-sm pointer-events-none"
+          style={{ 
+            zIndex: 50,
+            left: mousePos.x,
+            top: mousePos.y
+          }}
+        >
+          <div className="flex flex-col gap-1">
+            <div className="text-xs font-semibold text-foreground mb-1">情绪雷达维度得分</div>
+            {points.map(p => (
+              <div key={p.key} className="flex items-center justify-between gap-4 text-xs">
+                <span className="text-secondary">{p.label}</span>
+                <span className="font-mono font-semibold text-foreground">{Math.round(p.value)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
