@@ -986,8 +986,8 @@ export function WatchlistGroups() {
   // 排序切换逻辑
   const toggleSortMode = useCallback(() => {
     setSortMode(mode => {
-      if (mode === 'custom') return 'ascending'
-      if (mode === 'ascending') return 'descending'
+      if (mode === 'custom') return 'descending'
+      if (mode === 'descending') return 'ascending'
       return 'custom'
     })
   }, [])
@@ -1220,7 +1220,7 @@ export function WatchlistGroups() {
               type="button"
               onClick={toggleSortMode}
               className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-              title={sortMode === 'custom' ? '切换到按涨跌幅递增排序' : sortMode === 'ascending' ? '切换到按涨跌幅递减排序' : '切换到自定义排序'}
+              title={sortMode === 'custom' ? '切换到按涨跌幅递减排序' : sortMode === 'descending' ? '切换到按涨跌幅递增排序' : '切换到自定义排序'}
             >
               {sortMode === 'custom' && <ArrowUpDown className="h-4 w-4" />}
               {sortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
@@ -1573,7 +1573,7 @@ export function WatchlistGroups() {
               type="button"
               onClick={toggleSortMode}
               className="inline-flex items-center justify-center h-8 w-8 rounded-btn bg-elevated hover:bg-elevated/80 text-secondary hover:text-foreground transition-colors duration-150"
-              title={sortMode === 'custom' ? '切换到按涨跌幅递增排序' : sortMode === 'ascending' ? '切换到按涨跌幅递减排序' : '切换到自定义排序'}
+              title={sortMode === 'custom' ? '切换到按涨跌幅递减排序' : sortMode === 'descending' ? '切换到按涨跌幅递增排序' : '切换到自定义排序'}
             >
               {sortMode === 'custom' && <ArrowUpDown className="h-4 w-4" />}
               {sortMode === 'ascending' && <ArrowUp className="h-4 w-4" />}
