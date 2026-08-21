@@ -139,6 +139,12 @@ export const storage = {
   /** 自选分组列表分时图显示状态 */
   watchlistGroupsIntraday: kv<boolean>('watchlist_groups_showIntraday'),
 
+  /** 自选分组左侧分组排序模式 */
+  watchlistGroupsSortMode: kv<'custom' | 'ascending' | 'descending'>('watchlist_groups_sort_mode'),
+
+  /** 自选分组右侧个股排序模式 */
+  watchlistGroupsStockSortMode: kv<'default' | 'ascending' | 'descending'>('watchlist_groups_stock_sort_mode'),
+
   /** 涨跌颜色配置 (HSL 格式) */
   priceColors: kv<{ bull?: string; bear?: string }>('price_colors'),
 } as const

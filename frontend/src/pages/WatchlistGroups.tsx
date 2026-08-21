@@ -590,8 +590,12 @@ export function WatchlistGroups() {
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
   const [previewName, setPreviewName] = useState<string>('')
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
-  const [sortMode, setSortMode] = useState<'custom' | 'ascending' | 'descending'>('custom')
-  const [stockSortMode, setStockSortMode] = useState<'default' | 'ascending' | 'descending'>('default')
+  const [sortMode, setSortMode] = useState<'custom' | 'ascending' | 'descending'>(() => {
+    return storage.watchlistGroupsSortMode.get('custom') as 'custom' | 'ascending' | 'descending'
+  })
+  const [stockSortMode, setStockSortMode] = useState<'default' | 'ascending' | 'descending'>(() => {
+    return storage.watchlistGroupsStockSortMode.get('default') as 'default' | 'ascending' | 'descending'
+  })
   const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set())
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
 
@@ -986,18 +990,18 @@ export function WatchlistGroups() {
   // 排序切换逻辑
   const toggleSortMode = useCallback(() => {
     setSortMode(mode => {
-      if (mode === 'custom') return 'descending'
-      if (mode === 'descending') return 'ascending'
-      return 'custom'
+      const newMode = mode === 'custom' ? 'descending' : mode === 'descending' ? 'ascending' : 'custom'
+      storage.watchlistGroupsSortMode.set(newMode)
+      return newMode
     })
   }, [])
 
   // 个股排序切换逻辑
   const toggleStockSortMode = useCallback(() => {
     setStockSortMode(mode => {
-      if (mode === 'default') return 'descending'
-      if (mode === 'descending') return 'ascending'
-      return 'default'
+      const newMode = mode === 'default' ? 'descending' : mode === 'descending' ? 'ascending' : 'default'
+      storage.watchlistGroupsStockSortMode.set(newMode)
+      return newMode
     })
   }, [])
 
