@@ -590,9 +590,160 @@ def get_all_watchlist_symbols() -> list[str]:
             return []
         return list(set(df["symbol"].to_list()))
     except pl.exceptions.PolarsError as e:
-        logger.warning(f"Parquet error reading items file: {e}")
+        logger.warning("Parquet error reading items file: %s", e)
     except OSError as e:
-        logger.warning(f"OS error reading items file: {e}")
+        logger.warning("OS error reading items file: %s", e)
     except Exception as e:
-        logger.warning(f"Unexpected error reading items file: {e}", exc_info=True)
+        logger.warning("Unexpected error reading items file: %s", exc_info=True)
     return []
+
+
+def export_config() -> dict:
+    """导出完整的自选板块配置。
+    
+    返回包含分组、股票项和设置的完整字典。
+    """
+    from datetime import datetime
+    from app.services import preferences
+    
+    # 获取所有分组
+    groups = list_groups()
+    
+    # 获取每个分组的股票项
+    groups_with_items = []
+    for group in groups:
+        items = list_group_items(group["group_id"])
+        # 移除 group_id，只保留需要的字段
+        cleaned_items = []
+        for item in items:
+            cleaned_item = {k: v for k, v in item.items() if k != "group_id"}
+            cleaned_items.append(cleaned_item)
+        # 清理分组字段，只保留必要的
+        cleaned_group = {
+            "name": group["name"],
+            "order": group["order"],
+            "created_at": group.get("created_at"),
+            "items": cleaned_items
+        }
+        groups_with_items.append(cleaned_group)
+    
+    # 获取设置
+    settings = {
+        "view_mode": preferences.get_watchlist_groups_view_mode(),
+        "display_style": preferences.get_watchlist_groups_display_style(),
+        "avg_pct_mode": preferences.get_watchlist_groups_avg_pct_mode(),
+        "columns": preferences.get_watchlist_groups_columns()
+    }
+    
+    return {
+        "version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "groups": groups_with_items,
+        "settings": settings
+    }
+
+
+def import_config(data: dict, replace: bool = False) -> list[dict]:
+    """导入自选板块配置。
+    
+    Args:
+        data: 导出的配置数据
+        replace: 是否完全替换现有配置（True=替换，False=合并）
+    
+    Returns:
+        更新后的分组列表
+    """
+    from datetime import datetime
+    import uuid
+    from app.services import preferences
+    
+    # 验证数据格式
+    if not isinstance(data, dict):
+        raise ValueError("Invalid config data format")
+    
+    version = data.get("version", 1)
+    if version != 1:
+        raise ValueError(f"Unsupported config version: {version}")
+    
+    groups_data = data.get("groups", [])
+    if not isinstance(groups_data, list):
+        raise ValueError("Invalid groups data format")
+    
+    settings_data = data.get("settings", {})
+    
+    if replace:
+        # 完全替换模式：先清空现有数据
+        p_groups = _groups_path()
+        p_items = _items_path()
+        if p_groups.exists():
+            p_groups.unlink()
+        if p_items.exists():
+            p_items.unlink()
+    
+    # 处理分组和股票项
+    existing_groups = list_groups()
+    existing_names = {g["name"].strip().lower(): g for g in existing_groups}
+    
+    new_groups = []
+    for group_data in groups_data:
+        group_name = str(group_data.get("name", "")).strip()
+        if not group_name:
+            continue
+        
+        items_data = group_data.get("items", [])
+        if not isinstance(items_data, list):
+            continue
+        
+        if replace or group_name.lower() not in existing_names:
+            # 创建新分组
+            new_group = create_group(group_name)
+            if not new_group:
+                continue
+            # 获取刚创建的分组
+            created_group = _get_group_by_name(group_name)
+            if not created_group:
+                continue
+            group_id = created_group["group_id"]
+        else:
+            # 使用现有分组
+            group_id = existing_names[group_name.lower()]["group_id"]
+        
+        # 添加股票到分组
+        for item_data in items_data:
+            symbol = str(item_data.get("symbol", "")).strip().upper()
+            if not symbol:
+                continue
+            note = str(item_data.get("note", "")).strip()
+            try:
+                add_item(group_id, symbol, note)
+            except Exception as e:
+                logger.warning("Failed to add item %s to group %s: %s", symbol, group_id, e)
+        
+        new_groups.append(group_id)
+    
+    # 应用设置（如果有）
+    if settings_data and isinstance(settings_data, dict):
+        if "view_mode" in settings_data:
+            try:
+                preferences.set_watchlist_groups_view_mode(settings_data["view_mode"])
+            except Exception as e:
+                logger.warning("Failed to import view_mode setting: %s", e)
+        if "display_style" in settings_data:
+            try:
+                preferences.set_watchlist_groups_display_style(settings_data["display_style"])
+            except Exception as e:
+                logger.warning("Failed to import display_style setting: %s", e)
+        if "avg_pct_mode" in settings_data:
+            try:
+                preferences.set_watchlist_groups_avg_pct_mode(settings_data["avg_pct_mode"])
+            except Exception as e:
+                logger.warning("Failed to import avg_pct_mode setting: %s", e)
+        if "columns" in settings_data:
+            try:
+                columns = settings_data["columns"]
+                if columns is None or isinstance(columns, list):
+                    preferences.set_watchlist_groups_columns(columns)
+            except Exception as e:
+                logger.warning("Failed to import columns setting: %s", e)
+    
+    return get_groups_with_stats()

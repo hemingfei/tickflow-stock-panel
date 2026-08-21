@@ -1704,6 +1704,17 @@ export const api = {
           ? `/api/watchlist-groups/all-items-enriched?ext_columns=${encodeURIComponent(extColumns)}`
           : '/api/watchlist-groups/all-items-enriched',
       ),
+
+    exportConfig: () =>
+      request<{ version: number; exported_at: string; groups: any[]; settings: any }>(
+        '/api/watchlist-groups/export',
+      ),
+
+    importConfig: (data: any, replace: boolean = false) =>
+      request<{ groups: WatchlistGroup[] }>('/api/watchlist-groups/import', {
+        method: 'POST',
+        body: JSON.stringify({ data, replace }),
+      }),
   },
 
   screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index') => {

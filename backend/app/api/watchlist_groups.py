@@ -567,3 +567,35 @@ def update_columns(req: UpdateColumnsRequest):
     except Exception as e:
         logger.exception("Error updating columns")
         raise HTTPException(500, f"更新列配置失败: {str(e)}") from e
+
+
+# ===== 导入导出 =====
+
+class ImportConfigRequest(BaseModel):
+    data: dict
+    replace: bool = Field(default=False, description="是否完全替换现有配置")
+
+
+@router.get("/export")
+def export_config():
+    """导出自选板块配置为JSON。"""
+    try:
+        config = watchlist_groups_service.export_config()
+        return config
+    except Exception as e:
+        logger.exception("Error exporting config")
+        raise HTTPException(500, f"导出配置失败: {str(e)}") from e
+
+
+@router.post("/import")
+def import_config(req: ImportConfigRequest, request: Request):
+    """导入自选板块配置。"""
+    try:
+        groups = watchlist_groups_service.import_config(req.data, req.replace)
+        enriched_groups = [_enrich_group_with_stats(g, request) for g in groups]
+        return {"groups": enriched_groups}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:
+        logger.exception("Error importing config")
+        raise HTTPException(500, f"导入配置失败: {str(e)}") from e
