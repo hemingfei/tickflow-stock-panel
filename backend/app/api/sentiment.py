@@ -1,6 +1,6 @@
 """情绪周期(sentiment) API — 时序查询 + 手动重算。
 
-装配逻辑在 app.services.sentiment_builder(纯函数), API 层薄壳 + TTL 缓存。
+装配逻辑在 app.services.sentiment_builder (纯函数), API 层薄壳 + TTL 缓存。
 完全复用 regime API 的设计模式。
 """
 from __future__ import annotations
@@ -60,11 +60,7 @@ def sentiment_history(
     global _cache, _cache_ts
     cache_key = f"hist|{start}|{end}|{limit}"
     with _cache_lock:
-        if (
-            _cache is not None
-            and _cache.get("key") == cache_key
-            and (time.time() - _cache_ts) < _CACHE_TTL
-        ):
+        if _cache is not None and _cache.get("key") == cache_key and (time.time() - _cache_ts) < _CACHE_TTL:
             return _cache["data"]
 
     df = sentiment_builder.load_sentiment_history(_data_dir(request))
@@ -99,7 +95,7 @@ def pl_col_date(df, op: str, value: date):
 
 @router.get("/latest")
 def sentiment_latest(request: Request):
-    """最新一日情绪周期(轻量)。"""
+    """最新日情绪周期(轻量)。"""
     df = sentiment_builder.load_sentiment_history(_data_dir(request))
     if df.is_empty():
         return {"row": None}
@@ -110,7 +106,7 @@ def sentiment_latest(request: Request):
 
 @router.get("/coverage")
 def sentiment_coverage(request: Request):
-    """sentiment 数据覆盖元信息(供数据画像)。"""
+    """sentiment 数据覆盖元信息(供数据画像/API)。"""
     return sentiment_builder.get_sentiment_coverage(_data_dir(request))
 
 
@@ -119,16 +115,18 @@ def sentiment_recompute(request: Request, start: date | None = None, end: date |
     """手动触发重算(全量或指定区间)。管理员操作。
 
     - 不传 start: 强制全量重算(enriched 最早日 ~ 今天), 覆盖所有已有行。
-      与 daily_pipeline 的增量补差(compute_sentiment_incremental)不同 —— 此接口面向
+      与 daily_pipeline 的增量补差(compute_sentiment_incremental)不同 —— 该接口面向
       人工「我要重新算一遍」的预期, 必须真正重算而非增量补缺口。
     - 传 start: 仅重算 [start, end] 区间。
     """
     repo = request.app.state.repo
     data_dir = _data_dir(request)
     end = end or date.today()
-    
+
+    depth_service = getattr(request.app.state, "depth_service", None)
+
     logger.info("sentiment_recompute called with start=%s, end=%s", start, end)
-    
+
     if start is None:
         # 全量: 从 enriched 最早日强制重算到今天
         earliest = sentiment_builder.earliest_enriched_date(repo)
@@ -137,11 +135,11 @@ def sentiment_recompute(request: Request, start: date | None = None, end: date |
             invalidate_sentiment_cache()
             return {"ok": True, "computed": 0}
         start = earliest
-    
+
     logger.info("sentiment_recompute: computing from %s to %s", start, end)
-    new_rows = sentiment_builder.run_sentiment_batch(repo, start=start, end=end)
+    new_rows = sentiment_builder.run_sentiment_batch(repo, start=start, end=end, depth_service=depth_service)
     logger.info("sentiment_recompute: new_rows.height = %s", new_rows.height if not new_rows.is_empty() else 0)
-    
+
     if not new_rows.is_empty():
         sentiment_builder.upsert_sentiment_history(data_dir, new_rows)
     invalidate_sentiment_cache()
@@ -153,8 +151,9 @@ def sentiment_refresh(request: Request):
     """增量刷新:只计算当天、缺失的、以及stale的数据(快)。"""
     repo = request.app.state.repo
     data_dir = _data_dir(request)
+    depth_service = getattr(request.app.state, "depth_service", None)
     logger.info("sentiment_refresh called")
-    new_rows = sentiment_builder.compute_sentiment_incremental(repo, data_dir)
+    new_rows = sentiment_builder.compute_sentiment_incremental(repo, data_dir, depth_service=depth_service)
     logger.info("sentiment_refresh: new_rows.height = %s", new_rows.height if not new_rows.is_empty() else 0)
     invalidate_sentiment_cache()
     return {"ok": True, "computed": new_rows.height if not new_rows.is_empty() else 0}
