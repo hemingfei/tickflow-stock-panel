@@ -80,9 +80,15 @@ function isPresetKey(p: RangePreset, k: '1y' | '2y' | 'all'): boolean {
 }
 
 // ── EChart hook ───────────────────────────────────────────
-function useEChart(option: echarts.EChartsOption | null, deps: unknown[]) {
+function useEChart(
+  option: echarts.EChartsOption | null,
+  deps: unknown[],
+  events?: Record<string, (params: any) => void>
+) {
   const ref = useRef<HTMLDivElement>(null)
   const instRef = useRef<echarts.ECharts | null>(null)
+  const eventsRef = useRef<Record<string, (params: any) => void> | undefined>()
+  
   useEffect(() => {
     if (!ref.current) return
     instRef.current = echarts.init(ref.current, undefined, { renderer: 'canvas' })
@@ -94,9 +100,31 @@ function useEChart(option: echarts.EChartsOption | null, deps: unknown[]) {
       instRef.current = null
     }
   }, [])
+  
+  useEffect(() => {
+    if (!instRef.current) return
+    const inst = instRef.current
+    // 移除旧事件
+    if (eventsRef.current) {
+      Object.keys(eventsRef.current).forEach(evt => {
+        inst.off(evt)
+      })
+    }
+    // 添加新事件
+    if (events) {
+      Object.entries(events).forEach(([evt, handler]) => {
+        inst.on(evt, handler)
+      })
+    }
+    eventsRef.current = events
+  }, [events])
+  
   useEffect(() => {
     if (instRef.current && option) instRef.current.setOption(option, { notMerge: true })
   }, [option, ...deps])
+  
+  // 附加实例引用到 ref 对象上，方便外部访问
+  ;(ref as any).instRef = instRef
   return ref
 }
 
@@ -122,6 +150,8 @@ export function EmotionCycle() {
   const [customOpen, setCustomOpen] = useState(false)
   // 日历热力图显示模式: false=单行(月份网格横向排列+滚动条, 默认), true=展开(换行完整网格)
   const [calendarExpanded, setCalendarExpanded] = useState(false)
+  // 悬停日期: 记录用户在趋势图上悬停的日期索引，null 表示显示最新
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null)
   const ct = useChartTheme()
 
   // coverage: "全部"模式 + 标题展示依赖
@@ -145,33 +175,35 @@ export function EmotionCycle() {
   const [refreshing, setRefreshing] = useState(false)
 
   const rows: SentimentRow[] = history.data?.rows ?? []
-  const latest = rows.length > 0 ? rows[rows.length - 1] : null
+  const latestIndex = hoverIndex ?? (rows.length - 1)
+  const latest = rows.length > 0 ? rows[latestIndex] : null
 
-  // ── 当前势头: 末尾连续同标签天数 + score 5日斜率(改善/恶化) + 上次冰点距今 ──
+  // ── 当前势头: 基于当前悬停日期计算势头 ──
   const momentum = useMemo(() => {
     if (rows.length === 0) return null
-    const lastLabel = rows[rows.length - 1].emotion_label
-    // 末尾连续同标签天数
+    const currentLabel = rows[latestIndex].emotion_label
+    // 从当前索引向前连续同标签天数
     let streak = 1
-    for (let i = rows.length - 2; i >= 0; i--) {
-      if (rows[i].emotion_label === lastLabel) streak++
+    for (let i = latestIndex - 1; i >= 0; i--) {
+      if (rows[i].emotion_label === currentLabel) streak++
       else break
     }
-    // score 5日斜率(正=改善, 负=恶化)
-    const recent = rows.slice(-5)
+    // score 5日斜率(正=改善, 负=恶化) - 取当前索引向前5天
+    const recentStart = Math.max(0, latestIndex - 4)
+    const recent = rows.slice(recentStart, latestIndex + 1)
     const slope = recent.length >= 2
       ? (recent[recent.length - 1].emotion_score - recent[0].emotion_score) / (recent.length - 1)
       : 0
-    // 上次冰点距今天数
+    // 上次冰点距当前天数
     let lastFreezeGap = 0
-    for (let i = rows.length - 1; i >= 0; i--) {
+    for (let i = latestIndex; i >= 0; i--) {
       if (rows[i].emotion_label === '冰点' || rows[i].emotion_label === '偏冷') {
-        lastFreezeGap = rows.length - 1 - i
+        lastFreezeGap = latestIndex - i
         break
       }
     }
-    return { streak, label: lastLabel, slope, lastFreezeGap }
-  }, [rows])
+    return { streak, label: currentLabel, slope, lastFreezeGap }
+  }, [rows, latestIndex])
 
   // �─ 状态转换频率: 近 N 天相邻 label 变化次数 ──
   const transitions = useMemo(() => {
@@ -221,7 +253,26 @@ export function EmotionCycle() {
 
     return {
       backgroundColor: 'transparent',
-      tooltip: { trigger: 'axis', backgroundColor: ct.tooltipBg, borderColor: ct.tooltipBorder, textStyle: { color: ct.tooltipText } },
+      tooltip: { 
+        trigger: 'axis', 
+        triggerOn: 'mousemove|click' as const,
+        backgroundColor: ct.tooltipBg, 
+        borderColor: ct.tooltipBorder, 
+        textStyle: { color: ct.tooltipText },
+        enterable: true,
+        // 在 tooltip 显示时更新状态，同时保持原生样式显示
+        formatter: (params: any) => {
+          if (params && params.length > 0 && params[0].dataIndex != null) {
+            setHoverIndex(params[0].dataIndex)
+          }
+          // 返回 undefined 来使用 ECharts 原生的默认格式化
+          return undefined as any
+        }
+      },
+      axisPointer: {
+        type: 'cross' as const,
+        snap: true
+      },
       legend: {
         data: ['情绪分', '涨停数', '指数', '赚钱', '量能', '投机', '抗跌', '主线'],
         textStyle: { color: ct.text, fontSize: 10 }, top: 0,
@@ -281,7 +332,16 @@ export function EmotionCycle() {
       ],
     }
   }, [rows, days, ct])
-  const trendRef = useEChart(trendOption, [trendOption])
+  
+  // 简化的趋势图事件处理
+  const trendEvents = useMemo(() => ({
+    // 鼠标离开整个图表区域时清除
+    'globalout': () => {
+      setHoverIndex(null)
+    }
+  }), [])
+  
+  const trendRef = useEChart(trendOption, [trendOption], trendEvents)
 
   // 雷达图: 最新日 6 维度
   const radarOption = useMemo<echarts.EChartsOption | null>(() => {
@@ -589,12 +649,12 @@ export function EmotionCycle() {
       {/* ── 雷达图 + 趋势图 ── */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className={cn(cardCls, 'p-3')}>
-          <SectionTitle icon={Radar} title="最新雷达图" hint={latest ? latest.date : ''} />
+          <SectionTitle icon={Radar} title={hoverIndex != null ? "悬停日期雷达图" : "最新雷达图"} hint={latest ? latest.date : ''} />
           <div ref={radarRef} className="mt-2 h-[320px]" />
         </div>
         <div className={cn(cardCls, 'p-3 lg:col-span-2')}>
           <SectionTitle icon={Activity} title="情绪分趋势"
-            hint="情绪分(粗) · 6维度(细, 可点图例切换) · 背景色=情绪标签" />
+            hint="情绪分(粗) · 6维度(细, 可点图例切换) · 背景色=情绪标签 · 悬停查看历史数据" />
           <div ref={trendRef} className="mt-2 h-[320px]" />
         </div>
       </div>
