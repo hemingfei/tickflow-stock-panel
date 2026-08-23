@@ -92,16 +92,19 @@ function aggregateMinuteKlines(
 ): OHLC[] {
   if (!minuteData || minuteData.length === 0) return [];
 
-  // For 1-minute period, just convert format - 直接从datetime提取时间，和EChartsIntraday保持一致
+  // For 1-minute period, just convert format - 直接从datetime字符串提取时间
   if (period === "1") {
     return minuteData.map((row) => {
-      const dt = new Date(row.datetime);
-      // 不做时区转换，直接使用本地时间
-      const hours = String(dt.getHours()).padStart(2, "0");
-      const minutes = String(dt.getMinutes()).padStart(2, "0");
-      const dateStr = `${hours}:${minutes}`;
+      let timeStr = row.datetime;
+      if (timeStr.includes(' ')) {
+        timeStr = timeStr.split(' ')[1];
+      }
+      // 只取HH:MM部分
+      if (timeStr.length >= 5) {
+        timeStr = timeStr.substring(0, 5);
+      }
       return {
-        date: dateStr,
+        date: timeStr,
         open: Number(row.open),
         high: Number(row.high),
         low: Number(row.low),
@@ -132,35 +135,45 @@ function aggregateMinuteKlines(
   let currentLow: number | null = null;
   let currentClose: number | null = null;
   let currentVolume = 0;
-  let windowStart: Date | null = null;
+  let currentWindowKey: string | null = null;
 
   for (let i = 0; i < sortedData.length; i++) {
     const row = sortedData[i];
-    const dt = new Date(row.datetime);
+    
+    // 直接从datetime字符串中提取时间，避免时区问题
+    let timeStr = row.datetime;
+    if (timeStr.includes(' ')) {
+      timeStr = timeStr.split(' ')[1];
+    }
+    
+    // 解析小时和分钟
+    const timeParts = timeStr.split(':');
+    let hours = parseInt(timeParts[0], 10);
+    let minutes = parseInt(timeParts[1], 10);
+    
+    // 计算从9:30开始的分钟数
+    const minutesSince930 = (hours - 9) * 60 + (minutes - 30);
+    
+    // 确保不小于0
+    const validMinutesSince930 = Math.max(0, minutesSince930);
+    
+    // 计算时间窗口索引
+    const windowIndex = Math.floor(validMinutesSince930 / windowMinutes);
+    
+    // 计算窗口开始时间（从9:30开始计算）
+    const windowStartMinutes = windowIndex * windowMinutes;
+    const windowTotalMinutes = 9 * 60 + 30 + windowStartMinutes;
+    const windowHours = Math.floor(windowTotalMinutes / 60);
+    const windowMins = windowTotalMinutes % 60;
+    
+    const newWindowKey = `${String(windowHours).padStart(2, "0")}:${String(windowMins).padStart(2, "0")}`;
 
-    // Calculate the window start time for the current period - 不做时区转换
-    let newWindowStart: Date;
-
-    const minutesSinceOpen = (dt.getHours() - 9) * 60 + (dt.getMinutes() - 30);
-    const totalMinutesInWindow = Math.floor(minutesSinceOpen / windowMinutes) * windowMinutes;
-
-    const hours = 9 + Math.floor((totalMinutesInWindow + 30) / 60);
-    const minutes = (totalMinutesInWindow + 30) % 60;
-
-    newWindowStart = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), hours, minutes, 0, 0);
-
-	  // If this is the first data point or a new window starts
-    if (!windowStart || newWindowStart.getTime() !== windowStart.getTime()) {
+    // If this is the first data point or a new window starts
+    if (!currentWindowKey || newWindowKey !== currentWindowKey) {
       // If we have an ongoing window, save it
-      if (windowStart && currentClose !== null) {
-        const year = String(windowStart.getFullYear());
-        const month = String(windowStart.getMonth() + 1).padStart(2, "0");
-        const day = String(windowStart.getDate()).padStart(2, "0");
-        const hours = String(windowStart.getHours()).padStart(2, "0");
-        const minutes = String(windowStart.getMinutes()).padStart(2, "0");
-        const dateStr = `${year}-${month}-${day} ${hours}:${minutes}`;
+      if (currentWindowKey && currentClose !== null) {
         result.push({
-          date: dateStr,
+          date: currentWindowKey,
           open: currentOpen || 0,
           high: currentHigh || 0,
           low: currentLow || 0,
@@ -170,7 +183,7 @@ function aggregateMinuteKlines(
       }
 
       // Start a new window
-      windowStart = newWindowStart;
+      currentWindowKey = newWindowKey;
       currentOpen = Number(row.open);
       currentHigh = Number(row.high);
       currentLow = Number(row.low);
@@ -185,16 +198,10 @@ function aggregateMinuteKlines(
     }
   }
 
-	  // Save the last window
-  if (windowStart && currentClose !== null) {
-    const year = String(windowStart.getFullYear());
-    const month = String(windowStart.getMonth() + 1).padStart(2, "0");
-    const day = String(windowStart.getDate()).padStart(2, "0");
-    const hours = String(windowStart.getHours()).padStart(2, "0");
-    const minutes = String(windowStart.getMinutes()).padStart(2, "0");
-    const dateStr = `${year}-${month}-${day} ${hours}:${minutes}`;
+  // Save the last window
+  if (currentWindowKey && currentClose !== null) {
     result.push({
-      date: dateStr,
+      date: currentWindowKey,
       open: currentOpen || 0,
       high: currentHigh || 0,
       low: currentLow || 0,

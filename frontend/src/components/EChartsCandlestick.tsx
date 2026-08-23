@@ -599,7 +599,7 @@ function buildOption(
           // 格式为 "YYYY-MM-DD HH:MM"
           const [datePart, timePart] = value.split(' ');
           return timePart;
-        } else if (value.includes('-') && value.length <= 10) {
+        } else if (value.includes('-') && value.length <= 10 && value.length > 5) {
           // 格式为 "YYYY-MM-DD"
           const parts = value.split('-');
           if (parts.length === 3) {
@@ -607,11 +607,9 @@ function buildOption(
           }
         } else if (value.includes('-') && value.length === 7) {
           // 格式为 "YYYY-MM"
-          const parts = value.split('-');
-          if (parts.length === 2) {
-            return `${parts[0]}-${parts[1]}`;
-          }
+          return value;
         }
+        // 对于 "HH:MM" 格式，直接返回
         return value;
       },
     },
