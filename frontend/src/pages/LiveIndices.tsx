@@ -92,19 +92,30 @@ function aggregateMinuteKlines(
 ): OHLC[] {
   if (!minuteData || minuteData.length === 0) return [];
 
-  // For 1-minute period, just convert format - 直接从datetime字符串提取时间
+  // Helper function to parse time from datetime string - 和EChartsIntraday保持一致
+  function parseTime(dt: string): { h: number, m: number } {
+    const match = dt.match(/(\d{2}):(\d{2})/);
+    if (!match) {
+      const timeStr = dt.slice(11, 16);
+      const parts = timeStr.split(':');
+      return { h: parseInt(parts[0], 10), m: parseInt(parts[1], 10) };
+    }
+    const h = (parseInt(match[1]) + 8) % 24;
+    const m = parseInt(match[2], 10);
+    return { h, m };
+  }
+
+  // Helper function to format time
+  function formatTime(h: number, m: number): string {
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  }
+
+  // For 1-minute period, just convert format
   if (period === "1") {
     return minuteData.map((row) => {
-      let timeStr = row.datetime;
-      if (timeStr.includes(' ')) {
-        timeStr = timeStr.split(' ')[1];
-      }
-      // 只取HH:MM部分
-      if (timeStr.length >= 5) {
-        timeStr = timeStr.substring(0, 5);
-      }
+      const { h, m } = parseTime(row.datetime);
       return {
-        date: timeStr,
+        date: formatTime(h, m),
         open: Number(row.open),
         high: Number(row.high),
         low: Number(row.low),
@@ -140,33 +151,31 @@ function aggregateMinuteKlines(
   for (let i = 0; i < sortedData.length; i++) {
     const row = sortedData[i];
     
-    // 直接从datetime字符串中提取时间，避免时区问题
-    let timeStr = row.datetime;
-    if (timeStr.includes(' ')) {
-      timeStr = timeStr.split(' ')[1];
+    // 解析时间
+    const { h, m } = parseTime(row.datetime);
+    
+    // 计算从0点开始的总分钟数
+    const totalMinutes = h * 60 + m;
+    
+    // 9:30是570分钟
+    const startOfDayMinutes = 9 * 60 + 30;
+    
+    // 计算从9:30开始的分钟数（如果早于9:30就按0处理）
+    let minutesSinceStart = totalMinutes - startOfDayMinutes;
+    if (minutesSinceStart < 0) {
+      minutesSinceStart = 0;
     }
     
-    // 解析小时和分钟
-    const timeParts = timeStr.split(':');
-    let hours = parseInt(timeParts[0], 10);
-    let minutes = parseInt(timeParts[1], 10);
-    
-    // 计算从9:30开始的分钟数
-    const minutesSince930 = (hours - 9) * 60 + (minutes - 30);
-    
-    // 确保不小于0
-    const validMinutesSince930 = Math.max(0, minutesSince930);
-    
     // 计算时间窗口索引
-    const windowIndex = Math.floor(validMinutesSince930 / windowMinutes);
+    const windowIndex = Math.floor(minutesSinceStart / windowMinutes);
     
-    // 计算窗口开始时间（从9:30开始计算）
+    // 计算窗口开始时间
     const windowStartMinutes = windowIndex * windowMinutes;
-    const windowTotalMinutes = 9 * 60 + 30 + windowStartMinutes;
-    const windowHours = Math.floor(windowTotalMinutes / 60);
-    const windowMins = windowTotalMinutes % 60;
+    const windowTotalMinutes = startOfDayMinutes + windowStartMinutes;
+    const windowH = Math.floor(windowTotalMinutes / 60);
+    const windowM = windowTotalMinutes % 60;
     
-    const newWindowKey = `${String(windowHours).padStart(2, "0")}:${String(windowMins).padStart(2, "0")}`;
+    const newWindowKey = formatTime(windowH, windowM);
 
     // If this is the first data point or a new window starts
     if (!currentWindowKey || newWindowKey !== currentWindowKey) {
@@ -547,6 +556,14 @@ export function LiveIndices() {
     setPeriods((prev) => ({ ...prev, [symbol]: period }));
   };
 
+  const handleUnifiedPeriodChange = (period: PeriodType) => {
+    const newPeriods: Record<string, PeriodType> = {};
+    CORE_INDICES.forEach((index) => {
+      newPeriods[index.symbol] = period;
+    });
+    setPeriods(newPeriods);
+  };
+
   return (
     <div className="h-full overflow-auto bg-base p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -556,7 +573,30 @@ export function LiveIndices() {
             四大核心指数实时分时走势一览
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* Unified period selector */}
+          <div className="flex flex-wrap gap-1">
+            {PERIODS.map((p) => {
+              const disabled = (p.value !== "分时" && p.value !== "D" && p.value !== "W" && p.value !== "M" && !hasMinuteCap);
+              const allSelected = CORE_INDICES.every((i) => periods[i.symbol] === p.value);
+              return (
+                <button
+                  key={p.value}
+                  onClick={() => handleUnifiedPeriodChange(p.value)}
+                  disabled={disabled}
+                  className={`px-2 py-1 text-xs rounded transition-colors ${
+                    disabled
+                      ? "text-muted cursor-not-allowed opacity-50"
+                      : allSelected
+                      ? "bg-accent text-white"
+                      : "bg-surface border border-border hover:bg-elevated"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
           <button
             onClick={refresh}
             disabled={isRefreshing || quotes.isPending || batchMinute.isPending || dailyQueries.isPending}
