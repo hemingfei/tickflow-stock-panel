@@ -82,6 +82,7 @@ const nav = [
   { to: '/monitor', label: '监控中心', icon: RadioTower },
   { to: '/regime', label: '市场环境', icon: Gauge, badge: 'beta' },
   { to: '/emotion-cycle', label: '情绪周期', icon: Activity, badge: 'beta' },
+  { to: '/intraday-sentiment', label: '实时情绪', icon: Activity, badge: 'new' },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
   { to: '/data',       label: '数据',   icon: Database },

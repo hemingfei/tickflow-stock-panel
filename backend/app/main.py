@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, regime, sentiment, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist, watchlist_groups
+from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, regime, sentiment, sentiment_intraday, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist, watchlist_groups
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -245,6 +245,18 @@ async def lifespan(app: FastAPI):
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service
+    
+    # 实时情绪服务
+    try:
+        from app.services.intraday_sentiment import get_intraday_sentiment_service
+        intraday_sentiment_service = get_intraday_sentiment_service()
+        intraday_sentiment_service.set_repo(repo)
+        intraday_sentiment_service.set_depth_service(depth_service)
+        app.state.intraday_sentiment_service = intraday_sentiment_service
+        intraday_sentiment_service.start()
+        logger.info("intraday sentiment service started")
+    except Exception as e:
+        logger.warning("intraday sentiment service init failed: %s", e)
 
     yield
 
@@ -265,6 +277,9 @@ async def lifespan(app: FastAPI):
     wbot = getattr(app.state, "wecom_bot_service", None)
     if wbot:
         wbot.stop()
+    iss = getattr(app.state, "intraday_sentiment_service", None)
+    if iss:
+        iss.stop()
     logger.info("shutdown")
 
 
@@ -358,6 +373,7 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
+app.include_router(sentiment_intraday.router)
 
 
 # 能力门控异常 → 403(而非默认 500)

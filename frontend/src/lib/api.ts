@@ -530,6 +530,17 @@ export interface SentimentCoverage {
   latest_date: string | null
 }
 
+// ===== 实时情绪(Intraday Sentiment) =====
+export interface IntradaySentimentRow extends SentimentRow {
+  timestamp: number
+  time: string
+}
+
+export interface IntradaySentimentStatus {
+  trading_time: boolean
+  current_time: string
+}
+
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
   id: string
@@ -1801,6 +1812,19 @@ export const api = {
   sentimentRefresh: () => {
     return request<{ ok: boolean; computed: number }>('/api/sentiment/refresh', { method: 'POST' })
   },
+
+  // 实时情绪(Intraday Sentiment)
+  intradaySentimentLatest: (targetDate?: string) => {
+    const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : ''
+    return request<{ data: IntradaySentimentRow | null }>(`/api/sentiment/intraday/latest${qs}`)
+  },
+  intradaySentimentHistory: (targetDate?: string) => {
+    const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : ''
+    return request<{ data: IntradaySentimentRow[]; count: number }>(`/api/sentiment/intraday/history${qs}`)
+  },
+  intradaySentimentStatus: () => request<IntradaySentimentStatus>('/api/sentiment/intraday/status'),
+  intradaySentimentCompute: (force: boolean = false) => 
+    request<{ ok: boolean; data: IntradaySentimentRow | null }>(`/api/sentiment/intraday/compute?force=${force}`, { method: 'POST' }),
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()

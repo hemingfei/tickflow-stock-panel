@@ -28,6 +28,7 @@ const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.S
 const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
 const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
 const EmotionCycle = lazy(() => import('./pages/EmotionCycle').then(m => ({ default: m.EmotionCycle })))
+const IntradaySentiment = lazy(() => import('./pages/IntradaySentiment').then(m => ({ default: m.IntradaySentiment })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
 // 首次使用守卫 —— 未完成向导则重定向到 /onboarding
@@ -88,6 +89,7 @@ export const router = createBrowserRouter([
       { path: 'indices', element: <Indices /> },
       { path: 'regime', element: <Regime /> },
       { path: 'emotion-cycle', element: <EmotionCycle /> },
+      { path: 'intraday-sentiment', element: <IntradaySentiment /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）
