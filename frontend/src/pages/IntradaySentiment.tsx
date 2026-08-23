@@ -5,8 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import {
-  Activity, RefreshCw, Loader2, Gauge, TrendingUp, TrendingDown, Minus,
-  Clock, Zap
+  Activity, RefreshCw, Loader2, Gauge, Clock, Zap
 } from 'lucide-react'
 import {
   api, type IntradaySentimentRow,
@@ -24,14 +23,6 @@ const EMOTION_COLORS: Record<string, string> = {
   '冰点': '#10b981',
 }
 
-/** 综合分 → 对应颜色 */
-function scoreToColor(score: number): string {
-  if (score >= 70) return '#ef4444'
-  if (score >= 55) return '#f59e0b'
-  if (score >= 45) return '#6b7280'
-  if (score >= 30) return '#3b82f6'
-  return '#10b981'
-}
 
 /** ECharts hook */
 function useEChart(

@@ -597,7 +597,7 @@ function buildOption(
         // 智能格式化时间
         if (value.includes(' ')) {
           // 格式为 "YYYY-MM-DD HH:MM"
-          const [datePart, timePart] = value.split(' ');
+          const [_, timePart] = value.split(' ');
           return timePart;
         } else if (value.includes('-') && value.length <= 10 && value.length > 5) {
           // 格式为 "YYYY-MM-DD"
