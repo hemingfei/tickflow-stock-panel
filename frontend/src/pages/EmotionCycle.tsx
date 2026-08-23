@@ -735,7 +735,12 @@ export function EmotionCycle() {
                         cell ? (
                           <div key={i}
                             title={`${cell.date} ${cell.emotion_label}(${cell.emotion_score})`}
-                            className="h-[14px] w-[14px] rounded-[2px] transition-transform hover:scale-125 hover:z-10 cursor-default"
+                            className={cn(
+                              "h-[14px] w-[14px] rounded-[2px] transition-transform cursor-default",
+                              hoverIndex != null && rows[hoverIndex]?.date === cell.date 
+                                ? "scale-150 z-20 shadow-lg" 
+                                : "hover:scale-125 hover:z-10"
+                            )}
                             style={{ backgroundColor: emotionLabelToColor(cell.emotion_label) }}
                           />
                         ) : (
@@ -775,7 +780,12 @@ export function EmotionCycle() {
                         cell ? (
                           <div key={i}
                             title={`${cell.date} ${cell.emotion_label}(${cell.emotion_score})`}
-                            className="h-[14px] w-[14px] rounded-[2px] transition-transform hover:scale-125 hover:z-10 cursor-default"
+                            className={cn(
+                              "h-[14px] w-[14px] rounded-[2px] transition-transform cursor-default",
+                              hoverIndex != null && rows[hoverIndex]?.date === cell.date 
+                                ? "scale-150 z-20 shadow-lg" 
+                                : "hover:scale-125 hover:z-10"
+                            )}
                             style={{ backgroundColor: emotionLabelToColor(cell.emotion_label) }}
                           />
                         ) : (
