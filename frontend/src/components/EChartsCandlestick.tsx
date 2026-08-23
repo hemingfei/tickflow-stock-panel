@@ -363,10 +363,14 @@ function getTHEME() {
     bear: bearHex,
     bullAlpha: bullRgb ? `rgba(${bullRgb.r},${bullRgb.g},${bullRgb.b},0.6)` : 'rgba(240,68,56,0.6)',
     bearAlpha: bearRgb ? `rgba(${bearRgb.r},${bearRgb.g},${bearRgb.b},0.6)` : 'rgba(18,183,106,0.6)',
-    ma5: '#A1A1AA',
-    ma10: '#3B82F6',
-    ma20: '#F97316',
-    ma60: '#8B5CF6',
+    ma5: '#FACC15',
+    ma8: '#F97316',
+    ma10: '#10B981',
+    ma13: '#3B82F6',
+    ma55: '#8B5CF6',
+    ma60: '#EC4899',
+    ma65: '#14B8A6',
+    ma120: '#6366F1',
     bg: 'transparent',
   }
 }
@@ -585,7 +589,32 @@ function buildOption(
   xAxes.push({
     type: 'category', data: dates, boundaryGap: true,
     axisLine: { lineStyle: { color: CT().border } },
-    axisLabel: { color: CT().text, fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
+    axisLabel: {
+      color: CT().text,
+      fontSize: 10,
+      fontFamily: 'JetBrains Mono, monospace',
+      formatter: (value: string) => {
+        // 智能格式化时间
+        if (value.includes(' ')) {
+          // 格式为 "YYYY-MM-DD HH:MM"
+          const [datePart, timePart] = value.split(' ');
+          return timePart;
+        } else if (value.includes('-') && value.length <= 10) {
+          // 格式为 "YYYY-MM-DD"
+          const parts = value.split('-');
+          if (parts.length === 3) {
+            return `${parts[1]}-${parts[2]}`;
+          }
+        } else if (value.includes('-') && value.length === 7) {
+          // 格式为 "YYYY-MM"
+          const parts = value.split('-');
+          if (parts.length === 2) {
+            return `${parts[0]}-${parts[1]}`;
+          }
+        }
+        return value;
+      },
+    },
     axisTick: { show: false },
     splitLine: { show: false },
   })
@@ -689,17 +718,33 @@ function buildOption(
   })
 
   if (hasMA) {
-    const maLine = (key: keyof OHLC, color: string, name: string) => ({
+    const maLine = (key: string, color: string, name: string) => ({
       name, type: 'line',
-      data: data.map(d => (d[key] != null ? Number(d[key]) : '-')),
+      data: data.map(d => (d as any)[key] != null ? Number((d as any)[key]) : '-'),
       smooth: true, symbol: 'none', animation: false,
       silent: true,
       lineStyle: { width: 1, color }, itemStyle: { color },
     })
-    series.push(maLine('ma5', THEME.ma5, 'MA5'))
-    series.push(maLine('ma10', THEME.ma10, 'MA10'))
-    series.push(maLine('ma20', THEME.ma20, 'MA20'))
-    series.push(maLine('ma60', THEME.ma60, 'MA60'))
+    
+    // Check which MAs exist in data and add them
+    const availableMAs = [
+      { key: 'ma5', color: THEME.ma5, name: 'M5' },
+      { key: 'ma8', color: THEME.ma8, name: 'M8' },
+      { key: 'ma10', color: THEME.ma10, name: 'M10' },
+      { key: 'ma13', color: THEME.ma13, name: 'M13' },
+      { key: 'ma55', color: THEME.ma55, name: 'M55' },
+      { key: 'ma60', color: THEME.ma60, name: 'M60' },
+      { key: 'ma65', color: THEME.ma65, name: 'M65' },
+      { key: 'ma120', color: THEME.ma120, name: 'M120' },
+    ]
+    
+    // Only add MAs that have at least one non-null value
+    availableMAs.forEach(ma => {
+      const hasData = data.some(d => (d as any)[ma.key] != null)
+      if (hasData) {
+        series.push(maLine(ma.key, ma.color, ma.name))
+      }
+    })
   }
 
   // BOLL 布林带 — 需在 activeIndicators 中激活
@@ -943,12 +988,16 @@ export function EChartsCandlestick({
     // 第二行: MA + BOLL
     if (showMA) {
       html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;select:none;height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${Number(d.ma5).toFixed(2)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      if ((d as any).ma5 != null) html += `<span style="color:${THEME.ma5}">M5:${Number((d as any).ma5).toFixed(2)}</span>`
+      if ((d as any).ma8 != null) html += `<span style="color:${THEME.ma8}">M8:${Number((d as any).ma8).toFixed(2)}</span>`
+      if ((d as any).ma10 != null) html += `<span style="color:${THEME.ma10}">M10:${Number((d as any).ma10).toFixed(2)}</span>`
+      if ((d as any).ma13 != null) html += `<span style="color:${THEME.ma13}">M13:${Number((d as any).ma13).toFixed(2)}</span>`
+      if ((d as any).ma55 != null) html += `<span style="color:${THEME.ma55}">M55:${Number((d as any).ma55).toFixed(2)}</span>`
+      if ((d as any).ma60 != null) html += `<span style="color:${THEME.ma60}">M60:${Number((d as any).ma60).toFixed(2)}</span>`
+      if ((d as any).ma65 != null) html += `<span style="color:${THEME.ma65}">M65:${Number((d as any).ma65).toFixed(2)}</span>`
+      if ((d as any).ma120 != null) html += `<span style="color:${THEME.ma120}">M120:${Number((d as any).ma120).toFixed(2)}</span>`
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
-        html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
+        html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number((d as any).ma20 ?? d.close).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
       }
       html += `</div>`
     }
@@ -1179,12 +1228,16 @@ export function EChartsCandlestick({
     html += `</div>`
     if (showMA) {
       html += `<div style="display:flex;align-items:center;gap:10px;padding:0 8px;font:11px 'JetBrains Mono',monospace;height:20px;flex-wrap:wrap">`
-      if (d.ma5 != null) html += `<span style="color:${THEME.ma5}">MA5:${Number(d.ma5).toFixed(2)}</span>`
-      if (d.ma10 != null) html += `<span style="color:${THEME.ma10}">MA10:${Number(d.ma10).toFixed(2)}</span>`
-      if (d.ma20 != null) html += `<span style="color:${THEME.ma20}">MA20:${Number(d.ma20).toFixed(2)}</span>`
-      if (d.ma60 != null) html += `<span style="color:${THEME.ma60}">MA60:${Number(d.ma60).toFixed(2)}</span>`
+      if ((d as any).ma5 != null) html += `<span style="color:${THEME.ma5}">M5:${Number((d as any).ma5).toFixed(2)}</span>`
+      if ((d as any).ma8 != null) html += `<span style="color:${THEME.ma8}">M8:${Number((d as any).ma8).toFixed(2)}</span>`
+      if ((d as any).ma10 != null) html += `<span style="color:${THEME.ma10}">M10:${Number((d as any).ma10).toFixed(2)}</span>`
+      if ((d as any).ma13 != null) html += `<span style="color:${THEME.ma13}">M13:${Number((d as any).ma13).toFixed(2)}</span>`
+      if ((d as any).ma55 != null) html += `<span style="color:${THEME.ma55}">M55:${Number((d as any).ma55).toFixed(2)}</span>`
+      if ((d as any).ma60 != null) html += `<span style="color:${THEME.ma60}">M60:${Number((d as any).ma60).toFixed(2)}</span>`
+      if ((d as any).ma65 != null) html += `<span style="color:${THEME.ma65}">M65:${Number((d as any).ma65).toFixed(2)}</span>`
+      if ((d as any).ma120 != null) html += `<span style="color:${THEME.ma120}">M120:${Number((d as any).ma120).toFixed(2)}</span>`
       if (d.boll_upper != null && activeIndicators.includes('boll')) {
-        html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number(d.ma20).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
+        html += `<span style="color:#E879F9">BOLL:${Number(d.boll_upper).toFixed(2)}/${Number((d as any).ma20 ?? d.close).toFixed(2)}/${Number(d.boll_lower).toFixed(2)}</span>`
       }
       html += `</div>`
     }

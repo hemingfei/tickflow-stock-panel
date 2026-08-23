@@ -327,15 +327,16 @@ export function Indices() {
                       </div>
                     )}
                     {minuteRows.length > 0 && (
-                      <EChartsIntraday
-                        data={minuteRows}
-                        height={620}
-                        prevClose={prevClose}
-                        date={selectedDate ?? undefined}
-                        showLimitLines={false}
-                        showAvgLine={false}
-                        onPriceHover={setLinkedPrice}
-                      />
+              <EChartsIntraday
+                data={minuteRows}
+                height={620}
+                prevClose={prevClose}
+                date={selectedDate ?? undefined}
+                showLimitLines={false}
+                showAvgLine={false}
+                isIndex={true}
+                onPriceHover={setLinkedPrice}
+              />
                     )}
                   </>
                 )}

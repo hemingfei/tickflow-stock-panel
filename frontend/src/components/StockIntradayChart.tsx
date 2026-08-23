@@ -114,14 +114,15 @@ export function StockIntradayChart({
         </>
       )}
       {minuteRows.length > 0 && (
-        <EChartsIntraday
-          data={minuteRows}
-          height={height}
-          prevClose={prevClose}
-          date={date}
-          priceLimit={minute.data?.price_limit ?? undefined}
-          onPriceHover={onPriceHover}
-        />
+          <EChartsIntraday
+            data={minuteRows}
+            height={height}
+            prevClose={prevClose}
+            date={date}
+            priceLimit={minute.data?.price_limit ?? undefined}
+            onPriceHover={onPriceHover}
+            isIndex={isIndex}
+          />
       )}
     </div>
   )

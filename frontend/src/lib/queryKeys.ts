@@ -67,6 +67,8 @@ export const QK = {
                            ['index-daily', symbol, start, end] as const,
   indexMinute:          (symbol: string, date: string) =>
                            ['index-minute', symbol, date] as const,
+  indexMinuteBatch:    (symbols: string[]) =>
+                           ['index-minute-batch', ...symbols] as const,
 
   // Schema
   extDataSchemaAll:     ['ext-data-schema-all'] as const,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as echarts from 'echarts'
-import type { ECharts, EChartsOption } from 'echarts'
+import type { ECharts } from 'echarts'
 import type { MinuteKlineRow, PriceLimitInfo } from '@/lib/api'
 import { useChartTheme, type ChartTheme } from '@/lib/theme'
 
@@ -51,6 +51,8 @@ interface Props {
   onPriceHover?: (price: number | null) => void
   showLimitLines?: boolean
   showAvgLine?: boolean
+  /** 是否为指数（指数的成交量单位是股，不需要乘以100） */
+  isIndex?: boolean
 }
 
 function fmtTime(dt: string): string {
@@ -60,17 +62,36 @@ function fmtTime(dt: string): string {
   return `${String(h).padStart(2, '0')}:${match[2]}`
 }
 
-function computeAvgPrice(data: MinuteKlineRow[]): number[] {
-  // 分时均线 = 累计成交额 / 累计成交量(手→股)
-  const result: number[] = []
-  let sumAmt = 0
-  let sumVol = 0
-  for (const d of data) {
-    sumAmt += d.amount
-    sumVol += d.volume * 100
-    result.push(sumVol > 0 ? sumAmt / sumVol : d.close)
+function computeAvgPrice(data: MinuteKlineRow[], isIndex = false): number[] {
+  // 分时均线计算逻辑
+  if (isIndex) {
+    // 对于指数：使用简单移动平均线(SMA)而不是VWAP
+    // 因为指数本身就是一个加权价格，VWAP对指数意义不大
+    // 我们计算一个5周期的SMA作为均价参考
+    const result: number[] = []
+    const period = 5
+    let sum = 0
+    for (let i = 0; i < data.length; i++) {
+      sum += data[i].close
+      if (i >= period) {
+        sum -= data[i - period].close
+      }
+      const n = Math.min(i + 1, period)
+      result.push(sum / n)
+    }
+    return result
+  } else {
+    // 对于个股：标准VWAP计算 - 累计成交额 / 累计成交量(手→股，×100)
+    const result: number[] = []
+    let sumAmt = 0
+    let sumVol = 0
+    for (const d of data) {
+      sumAmt += d.amount
+      sumVol += d.volume * 100
+      result.push(sumVol > 0 ? sumAmt / sumVol : d.close)
+    }
+    return result
   }
-  return result
 }
 
 function fmtAmt(v: number): string {
@@ -128,7 +149,9 @@ function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   return { limitUp, limitDown, upPct, downPct }
 }
 
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true): EChartsOption {
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, isIndex = false) {
+  // 对于指数，默认不显示均价线
+  const effectiveShowAvgLine = isIndex ? false : showAvgLine
   // 将数据映射到全天时间轴上的正确位置
   const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
   const closes = new Array(FULL_DAY_TIMES.length).fill(null) as (number | null)[]
@@ -181,7 +204,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   let yMax: number | undefined
   let maxDiff = 0
   if (isValidPrice(prevClose) && data.length > 0) {
-    const priceArrays = showAvgLine ? [closes, highs, lows, avgData] : [closes, highs, lows]
+    const priceArrays = effectiveShowAvgLine ? [closes, highs, lows, avgData] : [closes, highs, lows]
     for (const arr of priceArrays) {
       for (const v of arr) {
         if (!isValidPrice(v)) continue
@@ -410,7 +433,7 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
         connectNulls: true,
         markLine: markLineData.length > 0 ? { symbol: 'none', data: markLineData, animation: false, silent: true } : undefined,
       },
-      ...(showAvgLine ? [{
+      ...(effectiveShowAvgLine ? [{
         name: '均价',
         type: 'line' as const,
         data: avgData,
@@ -432,7 +455,9 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
   }
 }
 
-export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimit, onPriceHover, showLimitLines = true, showAvgLine = true }: Props) {
+export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimit, onPriceHover, showLimitLines = true, showAvgLine = true, isIndex = false }: Props) {
+  // 对于指数，默认不显示均价线，因为指数本身就是一个加权价格
+  const effectiveShowAvgLine = isIndex ? false : showAvgLine
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ECharts | null>(null)
   const roRef = useRef<ResizeObserver | null>(null)
@@ -448,7 +473,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
   const [yMode, setYMode] = useState<YMode>('adaptive')
   const ct = useChartTheme()
   const priceColors = usePriceColors()
-  const avgPrices = useMemo(() => computeAvgPrice(data), [data])
+  const avgPrices = useMemo(() => computeAvgPrice(data, isIndex), [data, isIndex])
 
   // 分时线颜色：基于最新价 vs 昨收
   const THEME = getTHEME()
@@ -525,11 +550,11 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
       }
       fullDayToDataIdx.current = mapping
 
-      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine), true)
+      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, isIndex), true)
     } else {
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceColors])
+  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceColors, isIndex])
 
   useEffect(() => {
     return () => {
@@ -605,7 +630,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
                 <span style={{ display: 'inline-block', width: 14, height: 2, background: priceClr }} />
                 <span style={{ color: priceClr }}>{d.close.toFixed(2)}</span>
               </span>
-              {showAvgLine && <span className="flex items-center gap-x-1">
+              {effectiveShowAvgLine && <span className="flex items-center gap-x-1">
                 <span style={{ display: 'inline-block', width: 14, height: 2, background: getTHEME().avgLine }} />
                 <span style={{ color: getTHEME().avgLine }}>{avg?.toFixed(2)}</span>
               </span>}
