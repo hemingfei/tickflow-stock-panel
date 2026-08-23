@@ -42,6 +42,16 @@ function emotionLabelToColor(label: string): string {
   return EMOTION_COLORS[label] || '#6b7280'
 }
 
+// 格式化日期，显示周几
+function formatDateWithWeekday(dateStr: string): string {
+  if (!dateStr) return dateStr
+  const weekDays = ['日', '一', '二', '三', '四', '五', '六']
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  const weekDay = weekDays[date.getDay()]
+  return `${dateStr} 周${weekDay}`
+}
+
 // ── 时间范围 ──────────────────────────────────────────────
 type RangePreset = '1y' | '2y' | 'all' | { custom: number }
 
@@ -566,7 +576,7 @@ export function EmotionCycle() {
           {/* 情绪状态卡 */}
           <div className={cn(cardCls, 'p-3')}>
             <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Gauge className="h-3 w-3" /> 最新状态 · {latest.date}
+              <Gauge className="h-3 w-3" /> 最新状态 · {formatDateWithWeekday(latest.date)}
             </div>
             <div className="mt-1.5 flex items-baseline gap-2">
               <span className="text-2xl font-bold" style={{ color: emotionLabelToColor(latest.emotion_label) }}>
@@ -604,7 +614,7 @@ export function EmotionCycle() {
           {/* 6 子维度迷你条 */}
           <div className={cn(cardCls, 'p-3')}>
             <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Activity className="h-3 w-3" /> 六维拆解 · {latest.date}
+              <Activity className="h-3 w-3" /> 六维拆解 · {formatDateWithWeekday(latest.date)}
             </div>
             <div className="mt-2 space-y-1">
               {([
