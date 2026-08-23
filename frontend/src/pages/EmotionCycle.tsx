@@ -266,7 +266,26 @@ export function EmotionCycle() {
         backgroundColor: ct.tooltipBg, 
         borderColor: ct.tooltipBorder, 
         textStyle: { color: ct.tooltipText },
-        enterable: true
+        enterable: true,
+        formatter: (params: any) => {
+          if (params && params.length > 0 && params[0].dataIndex != null) {
+            setHoverIndex(params[0].dataIndex)
+          }
+          
+          // 构建自定义 tooltip 内容
+          if (!params || params.length === 0) return ''
+          
+          let result = `<div style="font-weight: 600; margin-bottom: 8px;">${params[0].axisValue}</div>`
+          
+          params.forEach((param: any) => {
+            if (param.seriesName && param.value != null) {
+              const marker = param.marker || '<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:' + param.color + ';"></span>'
+              result += `<div style="display:flex;align-items:center;margin:3px 0;">${marker}<span style="margin-left:4px;">${param.seriesName}:</span><span style="font-weight:600;margin-left:8px;">${param.value}</span></div>`
+            }
+          })
+          
+          return result
+        }
       },
       axisPointer: {
         type: 'cross' as const,
@@ -332,42 +351,13 @@ export function EmotionCycle() {
     }
   }, [rows, days, ct])
   
-  // 优化的趋势图事件处理 - 防抖 + 多事件支持
-  const trendEvents = useMemo(() => {
-    // 防抖更新函数
-    const updateHoverIndex = (index: number) => {
-      setHoverIndex(index)
+  // 简化的趋势图事件处理
+  const trendEvents = useMemo(() => ({
+    // 鼠标离开整个图表区域时清除
+    'globalout': () => {
+      setHoverIndex(null)
     }
-    
-    return {
-      // 监听多个事件确保响应灵敏
-      'mouseover': (params: { dataIndex?: number }) => {
-        if (params.dataIndex != null) {
-          updateHoverIndex(params.dataIndex)
-        }
-      },
-      'mousemove': (params: { dataIndex?: number }) => {
-        if (params.dataIndex != null) {
-          updateHoverIndex(params.dataIndex)
-        }
-      },
-      'updateAxisPointer': (params: {
-        batch?: Array<{ dataIndex?: number; valueIndex?: number }>
-      }) => {
-        if (params.batch && params.batch.length > 0) {
-          const batch = params.batch[0]
-          if (batch.dataIndex != null) {
-            updateHoverIndex(batch.dataIndex)
-          } else if (batch.valueIndex != null) {
-            updateHoverIndex(batch.valueIndex)
-          }
-        }
-      },
-      'globalout': () => {
-        setHoverIndex(null)
-      }
-    }
-  }, [])
+  }), [])
   
   const trendRef = useEChart(trendOption, [trendOption], trendEvents)
 
