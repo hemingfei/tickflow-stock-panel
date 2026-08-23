@@ -266,15 +266,7 @@ export function EmotionCycle() {
         backgroundColor: ct.tooltipBg, 
         borderColor: ct.tooltipBorder, 
         textStyle: { color: ct.tooltipText },
-        enterable: true,
-        // 在 tooltip 显示时更新状态，同时保持原生样式显示
-        formatter: (params: any) => {
-          if (params && params.length > 0 && params[0].dataIndex != null) {
-            setHoverIndex(params[0].dataIndex)
-          }
-          // 返回 undefined 来使用 ECharts 原生的默认格式化
-          return undefined as any
-        }
+        enterable: true
       },
       axisPointer: {
         type: 'cross' as const,
@@ -340,13 +332,42 @@ export function EmotionCycle() {
     }
   }, [rows, days, ct])
   
-  // 简化的趋势图事件处理
-  const trendEvents = useMemo(() => ({
-    // 鼠标离开整个图表区域时清除
-    'globalout': () => {
-      setHoverIndex(null)
+  // 优化的趋势图事件处理 - 防抖 + 多事件支持
+  const trendEvents = useMemo(() => {
+    // 防抖更新函数
+    const updateHoverIndex = (index: number) => {
+      setHoverIndex(index)
     }
-  }), [])
+    
+    return {
+      // 监听多个事件确保响应灵敏
+      'mouseover': (params: { dataIndex?: number }) => {
+        if (params.dataIndex != null) {
+          updateHoverIndex(params.dataIndex)
+        }
+      },
+      'mousemove': (params: { dataIndex?: number }) => {
+        if (params.dataIndex != null) {
+          updateHoverIndex(params.dataIndex)
+        }
+      },
+      'updateAxisPointer': (params: {
+        batch?: Array<{ dataIndex?: number; valueIndex?: number }>
+      }) => {
+        if (params.batch && params.batch.length > 0) {
+          const batch = params.batch[0]
+          if (batch.dataIndex != null) {
+            updateHoverIndex(batch.dataIndex)
+          } else if (batch.valueIndex != null) {
+            updateHoverIndex(batch.valueIndex)
+          }
+        }
+      },
+      'globalout': () => {
+        setHoverIndex(null)
+      }
+    }
+  }, [])
   
   const trendRef = useEChart(trendOption, [trendOption], trendEvents)
 
