@@ -288,15 +288,36 @@ export function EmotionCycle() {
     if (!latest) return null
     return {
       backgroundColor: 'transparent',
-      tooltip: { backgroundColor: ct.tooltipBg, borderColor: ct.tooltipBorder, textStyle: { color: ct.tooltipText } },
+      tooltip: {
+        backgroundColor: ct.tooltipBg,
+        borderColor: ct.tooltipBorder,
+        textStyle: { color: ct.tooltipText },
+        formatter: () => {
+          if (!latest) return ''
+          return `
+            <div style="padding: 4px 0;">
+              <div style="font-weight: 600; margin-bottom: 6px;">${latest.emotion_label}</div>
+              <div style="display: grid; gap: 2px;">
+                <div>指数: ${latest.index_score}</div>
+                <div>赚钱: ${latest.profit_score}</div>
+                <div>量能: ${latest.money_score}</div>
+                <div>投机: ${latest.speculation_score}</div>
+                <div>抗跌: ${latest.resilience_score}</div>
+                <div>主线: ${latest.mainline_score}</div>
+              </div>
+            </div>
+          `
+        }
+      },
       radar: {
+        startAngle: 90,
         indicator: [
           { name: '指数', max: 100 },
-          { name: '赚钱', max: 100 },
-          { name: '量能', max: 100 },
-          { name: '投机', max: 100 },
-          { name: '抗跌', max: 100 },
           { name: '主线', max: 100 },
+          { name: '抗跌', max: 100 },
+          { name: '投机', max: 100 },
+          { name: '量能', max: 100 },
+          { name: '赚钱', max: 100 },
         ],
         axisName: { color: ct.text, fontSize: 11 },
         splitArea: { areaStyle: { color: ['rgba(255,255,255,0.02)', 'rgba(255,255,255,0.04)'] } },
@@ -308,11 +329,11 @@ export function EmotionCycle() {
         data: [{
           value: [
             latest.index_score,
-            latest.profit_score,
-            latest.money_score,
-            latest.speculation_score,
-            latest.resilience_score,
             latest.mainline_score,
+            latest.resilience_score,
+            latest.speculation_score,
+            latest.money_score,
+            latest.profit_score,
           ],
           name: latest.emotion_label,
           areaStyle: { opacity: 0.3, color: emotionLabelToColor(latest.emotion_label) },
