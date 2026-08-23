@@ -83,7 +83,8 @@ function isPresetKey(p: RangePreset, k: '1y' | '2y' | 'all'): boolean {
 function useEChart(
   option: echarts.EChartsOption | null,
   deps: unknown[],
-  events?: Record<string, (params: any) => void>
+  events?: Record<string, (params: any) => void>,
+  opts?: { notMerge?: boolean }
 ) {
   const ref = useRef<HTMLDivElement>(null)
   const instRef = useRef<echarts.ECharts | null>(null)
@@ -120,7 +121,13 @@ function useEChart(
   }, [events])
   
   useEffect(() => {
-    if (instRef.current && option) instRef.current.setOption(option, { notMerge: true })
+    if (instRef.current && option) {
+      // 使用 replaceMerge 来优化更新性能，特别是对雷达图这样的图表
+      instRef.current.setOption(option, { 
+        notMerge: opts?.notMerge ?? true,
+        lazyUpdate: false
+      })
+    }
   }, [option, ...deps])
   
   // 附加实例引用到 ref 对象上，方便外部访问
@@ -348,6 +355,11 @@ export function EmotionCycle() {
     if (!latest) return null
     return {
       backgroundColor: 'transparent',
+      animation: true,
+      animationDuration: 200,
+      animationDurationUpdate: 200,
+      animationEasing: 'cubicOut',
+      animationEasingUpdate: 'cubicOut',
       tooltip: {
         backgroundColor: ct.tooltipBg,
         borderColor: ct.tooltipBorder,
@@ -387,6 +399,7 @@ export function EmotionCycle() {
       series: [{
         type: 'radar',
         data: [{
+          id: 'emotion-radar',
           value: [
             latest.index_score,
             latest.mainline_score,
@@ -403,7 +416,7 @@ export function EmotionCycle() {
       }],
     }
   }, [latest, ct])
-  const radarRef = useEChart(radarOption, [radarOption])
+  const radarRef = useEChart(radarOption, [radarOption], undefined, { notMerge: false })
 
   // 日历热力图数据: 按月分组(纯 CSS 渲染)
   const calendarMonths = useMemo(() => {
