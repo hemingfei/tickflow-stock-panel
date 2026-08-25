@@ -622,7 +622,7 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
             </>
           )}
         </div>
-        {/* 第二行: 价格+均价+量+额 */}
+        {/* 第二行: 价格+均价+量+额+涨跌 */}
         <div className="flex items-center gap-x-4 px-2 font-mono text-[11px] select-none" style={{ height: 20 }}>
           {d && (
             <>
@@ -638,6 +638,18 @@ export function EChartsIntraday({ data, height = 320, prevClose, date, priceLimi
               <span className="text-secondary">{d.volume.toFixed(0)}</span>
               <span className="text-muted">额</span>
               <span className="text-secondary">{fmtAmt(d.amount)}</span>
+              {prevClose != null && (
+                <>
+                  <span className="text-muted">涨跌</span>
+                  <span style={{ color: priceClr }}>
+                    {(() => {
+                      const pct = (d.close - prevClose) / prevClose * 100
+                      const sign = pct > 0 ? '+' : ''
+                      return `${sign}${pct.toFixed(2)}%`
+                    })()}
+                  </span>
+                </>
+              )}
             </>
           )}
         </div>

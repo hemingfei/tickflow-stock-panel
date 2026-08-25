@@ -29,6 +29,7 @@ const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Ind
 const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regime })))
 const EmotionCycle = lazy(() => import('./pages/EmotionCycle').then(m => ({ default: m.EmotionCycle })))
 const IntradaySentiment = lazy(() => import('./pages/IntradaySentiment').then(m => ({ default: m.IntradaySentiment })))
+const IntradayRegime = lazy(() => import('./pages/IntradayRegime').then(m => ({ default: m.IntradayRegime })))
 const LiveIndices = lazy(() => import('./pages/LiveIndices').then(m => ({ default: m.LiveIndices })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
@@ -91,6 +92,7 @@ export const router = createBrowserRouter([
               { path: 'regime', element: <Regime /> },
               { path: 'emotion-cycle', element: <EmotionCycle /> },
               { path: 'intraday-sentiment', element: <IntradaySentiment /> },
+              { path: 'intraday-regime', element: <IntradayRegime /> },
               { path: 'live-indices', element: <LiveIndices /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },

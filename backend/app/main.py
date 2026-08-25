@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, regime, sentiment, sentiment_intraday, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist, watchlist_groups
+from app.api import analysis, auth as auth_api, backtest, data, ext_data, financials, indices, intraday, kline, market_recap, monitor_rules, alerts, overview, pipeline, regime, regime_intraday, sentiment, sentiment_intraday, rps, screener, settings as settings_api, signals, stock_analysis, strategy, watchlist, watchlist_groups
 from app.api.routes import router as core_router
 from app.config import settings
 from app.jobs import daily_pipeline
@@ -257,6 +257,17 @@ async def lifespan(app: FastAPI):
         logger.info("intraday sentiment service started")
     except Exception as e:
         logger.warning("intraday sentiment service init failed: %s", e)
+    
+    # 实时环境服务
+    try:
+        from app.services.intraday_regime import get_intraday_regime_service
+        intraday_regime_service = get_intraday_regime_service()
+        intraday_regime_service.set_repo(repo)
+        app.state.intraday_regime_service = intraday_regime_service
+        intraday_regime_service.start()
+        logger.info("intraday regime service started")
+    except Exception as e:
+        logger.warning("intraday regime service init failed: %s", e)
 
     yield
 
@@ -280,6 +291,9 @@ async def lifespan(app: FastAPI):
     iss = getattr(app.state, "intraday_sentiment_service", None)
     if iss:
         iss.stop()
+    irs = getattr(app.state, "intraday_regime_service", None)
+    if irs:
+        irs.stop()
     logger.info("shutdown")
 
 
@@ -374,6 +388,7 @@ app.include_router(monitor_rules.router)
 app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(sentiment_intraday.router)
+app.include_router(regime_intraday.router)
 
 
 # 能力门控异常 → 403(而非默认 500)

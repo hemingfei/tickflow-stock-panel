@@ -541,6 +541,17 @@ export interface IntradaySentimentStatus {
   current_time: string
 }
 
+// ===== 实时环境(Intraday Regime) =====
+export interface IntradayRegimeRow extends RegimeRow {
+  timestamp: number
+  time: string
+}
+
+export interface IntradayRegimeStatus {
+  trading_time: boolean
+  current_time: string
+}
+
 // ===== 大盘复盘 =====
 export interface AiReviewReport {
   id: string
@@ -1828,6 +1839,22 @@ export const api = {
   intradaySentimentStatus: () => request<IntradaySentimentStatus>('/api/sentiment/intraday/status'),
   intradaySentimentCompute: (force: boolean = false) => 
     request<{ ok: boolean; data: IntradaySentimentRow | null }>(`/api/sentiment/intraday/compute?force=${force}`, { method: 'POST' }),
+
+  // 实时环境(Intraday Regime)
+  intradayRegimeLatest: (targetDate?: string) => {
+    const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : ''
+    return request<{ data: IntradayRegimeRow | null }>(`/api/regime/intraday/latest${qs}`)
+  },
+  intradayRegimeHistory: (targetDate?: string) => {
+    const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : ''
+    return request<{ data: IntradayRegimeRow[]; count: number }>(`/api/regime/intraday/history${qs}`)
+  },
+  intradayRegimeDates: () => {
+    return request<{ dates: string[] }>('/api/regime/intraday/dates')
+  },
+  intradayRegimeStatus: () => request<IntradayRegimeStatus>('/api/regime/intraday/status'),
+  intradayRegimeCompute: (force: boolean = false) => 
+    request<{ ok: boolean; data: IntradayRegimeRow | null }>(`/api/regime/intraday/compute?force=${force}`, { method: 'POST' }),
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()
