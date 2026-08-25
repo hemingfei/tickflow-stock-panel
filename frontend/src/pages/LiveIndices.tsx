@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Activity, Loader2, Lock, RefreshCw } from "lucide-react";
+import { Activity, Loader2, Lock, RefreshCw, LayoutGrid } from "lucide-react";
 import { api, type IndexQuote, type MinuteKlineRow, type KlineRow } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
 import { useCapabilities } from "@/lib/useSharedQueries";
@@ -92,7 +92,7 @@ function aggregateMinuteKlines(
 ): OHLC[] {
   if (!minuteData || minuteData.length === 0) return [];
 
-  // Helper function to parse time from datetime string - 和EChartsIntraday保持一致
+  // Helper function to parse time from datetime string - and EChartsIntraday保持一致
   function parseTime(dt: string): { h: number, m: number } {
     const match = dt.match(/(\d{2}):(\d{2})/);
     if (!match) {
@@ -107,7 +107,7 @@ function aggregateMinuteKlines(
 
   // Helper function to format time
   function formatTime(h: number, m: number): string {
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
   // For 1-minute period, just convert format
@@ -135,89 +135,103 @@ function aggregateMinuteKlines(
     default: windowMinutes = 5;
   }
 
+  // 生成所有时间窗口（用结束时间标记）
+  function generateTimeWindows(): string[] {
+    const windows: string[] = [];
+    // 上午：9:35-11:30
+    for (let minutes = windowMinutes; minutes <= 120; minutes += windowMinutes) {
+      const totalMinutes = 9 * 60 + 30 + minutes;
+      windows.push(formatTime(Math.floor(totalMinutes / 60), totalMinutes % 60));
+    }
+    // 下午：13:15-15:00
+    for (let minutes = windowMinutes; minutes <= 120; minutes += windowMinutes) {
+      const totalMinutes = 13 * 60 + minutes;
+      windows.push(formatTime(Math.floor(totalMinutes / 60), totalMinutes % 60));
+    }
+    return windows;
+  }
+  
+  const timeWindows = generateTimeWindows();
+  
+  // 为每个时间窗口创建映射
+  const windowMap = new Map<string, { open: number | null, high: number | null, low: number | null, close: number | null, volume: number }>();
+  timeWindows.forEach(window => {
+    windowMap.set(window, { open: null, high: null, low: null, close: null, volume: 0 });
+  });
+
+  // 查找给定时间属于哪个窗口（用结束时间标记，第一根特殊处理）
+  function findWindowKey(h: number, m: number): string | null {
+    const totalMinutes = h * 60 + m;
+    
+    // 上午时段：9:30-11:30
+    if (totalMinutes >= 9 * 60 + 30 && totalMinutes <= 11 * 60 + 30) {
+      const minutesSinceStart = totalMinutes - (9 * 60 + 30);
+      
+      // 上午第一根特殊处理：9:30到第一个窗口结束时间（共 windowMinutes + 1 根1分K）
+      if (minutesSinceStart <= windowMinutes) {
+        const windowEndMinutes = 9 * 60 + 30 + windowMinutes;
+        return formatTime(Math.floor(windowEndMinutes / 60), windowEndMinutes % 60);
+      }
+      
+      // 后面正常：每个窗口包含 windowMinutes 根1分K
+      const adjustedMinutes = minutesSinceStart - 1;
+      const windowIndex = Math.floor(adjustedMinutes / windowMinutes);
+      const windowEndMinutes = 9 * 60 + 30 + (windowIndex + 1) * windowMinutes;
+      return formatTime(Math.floor(windowEndMinutes / 60), windowEndMinutes % 60);
+    }
+    
+    // 下午时段：13:01-15:00（没有13:00这根）
+    if (totalMinutes >= 13 * 60 + 1 && totalMinutes <= 15 * 60) {
+      const minutesSince1301 = totalMinutes - (13 * 60 + 1);
+      
+      // 下午正常处理，从13:01开始，每根都是 windowMinutes 根
+      const windowIndex = Math.floor(minutesSince1301 / windowMinutes);
+      // 窗口结束时间 = 13:01 + (windowIndex + 1) * windowMinutes - 1 = 13:00 + (windowIndex + 1) * windowMinutes
+      const windowEndMinutes = 13 * 60 + (windowIndex + 1) * windowMinutes;
+      return formatTime(Math.floor(windowEndMinutes / 60), windowEndMinutes % 60);
+    }
+    
+    return null;
+  }
+
   // Sort data by datetime
   const sortedData = [...minuteData].sort((a, b) =>
     new Date(a.datetime).getTime() - new Date(b.datetime).getTime()
   );
 
-  const result: OHLC[] = [];
-  let currentOpen: number | null = null;
-  let currentHigh: number | null = null;
-  let currentLow: number | null = null;
-  let currentClose: number | null = null;
-  let currentVolume = 0;
-  let currentWindowKey: string | null = null;
-
+  // 分配数据到各个窗口
   for (let i = 0; i < sortedData.length; i++) {
     const row = sortedData[i];
-    
-    // 解析时间
     const { h, m } = parseTime(row.datetime);
+    const windowKey = findWindowKey(h, m);
     
-    // 计算从0点开始的总分钟数
-    const totalMinutes = h * 60 + m;
-    
-    // 9:30是570分钟
-    const startOfDayMinutes = 9 * 60 + 30;
-    
-    // 计算从9:30开始的分钟数（如果早于9:30就按0处理）
-    let minutesSinceStart = totalMinutes - startOfDayMinutes;
-    if (minutesSinceStart < 0) {
-      minutesSinceStart = 0;
-    }
-    
-    // 计算时间窗口索引
-    const windowIndex = Math.floor(minutesSinceStart / windowMinutes);
-    
-    // 计算窗口开始时间
-    const windowStartMinutes = windowIndex * windowMinutes;
-    const windowTotalMinutes = startOfDayMinutes + windowStartMinutes;
-    const windowH = Math.floor(windowTotalMinutes / 60);
-    const windowM = windowTotalMinutes % 60;
-    
-    const newWindowKey = formatTime(windowH, windowM);
-
-    // If this is the first data point or a new window starts
-    if (!currentWindowKey || newWindowKey !== currentWindowKey) {
-      // If we have an ongoing window, save it
-      if (currentWindowKey && currentClose !== null) {
-        result.push({
-          date: currentWindowKey,
-          open: currentOpen || 0,
-          high: currentHigh || 0,
-          low: currentLow || 0,
-          close: currentClose,
-          volume: currentVolume,
-        });
+    if (windowKey && windowMap.has(windowKey)) {
+      const windowData = windowMap.get(windowKey)!;
+      if (windowData.open === null) {
+        windowData.open = Number(row.open);
       }
-
-      // Start a new window
-      currentWindowKey = newWindowKey;
-      currentOpen = Number(row.open);
-      currentHigh = Number(row.high);
-      currentLow = Number(row.low);
-      currentClose = Number(row.close);
-      currentVolume = Number(row.volume || 0);
-    } else {
-      // Continue the current window
-      currentHigh = Math.max(currentHigh || 0, Number(row.high));
-      currentLow = Math.min(currentLow || Infinity, Number(row.low));
-      currentClose = Number(row.close);
-      currentVolume += Number(row.volume || 0);
+      windowData.high = windowData.high === null ? Number(row.high) : Math.max(windowData.high, Number(row.high));
+      windowData.low = windowData.low === null ? Number(row.low) : Math.min(windowData.low, Number(row.low));
+      windowData.close = Number(row.close);
+      windowData.volume += Number(row.volume || 0);
     }
   }
 
-  // Save the last window
-  if (currentWindowKey && currentClose !== null) {
-    result.push({
-      date: currentWindowKey,
-      open: currentOpen || 0,
-      high: currentHigh || 0,
-      low: currentLow || 0,
-      close: currentClose,
-      volume: currentVolume,
-    });
-  }
+  // 构建结果，只包含有数据的窗口
+  const result: OHLC[] = [];
+  timeWindows.forEach(windowKey => {
+    const windowData = windowMap.get(windowKey)!;
+    if (windowData.close !== null) {
+      result.push({
+        date: windowKey,
+        open: windowData.open || 0,
+        high: windowData.high || 0,
+        low: windowData.low || 0,
+        close: windowData.close,
+        volume: windowData.volume,
+      });
+    }
+  });
 
   return result;
 }
@@ -389,36 +403,23 @@ function IndexCard({
         </div>
       </div>
 
-      {/* Period selector */}
-      <div className="mb-2 flex flex-wrap gap-1">
-        {PERIODS.map((p) => {
-          const disabled = (p.value !== "分时" && p.value !== "D" && p.value !== "W" && p.value !== "M" && !hasMinuteCap)
-          return (
-            <button
-              key={p.value}
-              onClick={() => onPeriodChange(p.value)}
-              disabled={disabled}
-              className={`px-2 py-1 text-xs rounded transition-colors ${
-                disabled
-                  ? "text-muted cursor-not-allowed opacity-50"
-                  : period === p.value
-                  ? "bg-accent text-white"
-                  : "bg-surface border border-border hover:bg-elevated"
-              }`}
-            >
-              {p.label}
-            </button>
-          )
-        })}
-      </div>
-
       {/* Chart */}
       {period !== "分时" && period !== "D" && period !== "W" && period !== "M" && !hasMinuteCap ? (
         <div className="flex h-64 flex-col items-center justify-center gap-2 text-center">
           <Lock className="h-5 w-5 text-muted" />
           <div className="text-xs text-secondary">分时数据权限需 Pro+</div>
         </div>
-      ) : (period === "分时" && minuteLoading) || (isDailyPeriod && dailyLoading) ? (
+      ) : period === "分时" && !minuteData && minuteLoading ? (
+        <div className="flex h-64 items-center justify-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted" />
+          <span className="ml-2 text-xs text-muted">数据加载中…</span>
+        </div>
+      ) : isMinutePeriod && !chartDataWithMA?.length && minuteLoading ? (
+        <div className="flex h-64 items-center justify-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted" />
+          <span className="ml-2 text-xs text-muted">数据加载中…</span>
+        </div>
+      ) : isDailyPeriod && !chartDataWithMA?.length && dailyLoading ? (
         <div className="flex h-64 items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-muted" />
           <span className="ml-2 text-xs text-muted">数据加载中…</span>
@@ -466,12 +467,20 @@ function IndexCard({
 export function LiveIndices() {
   const qc = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [gridCols, setGridCols] = useState(3); // 默认1行3个
   const [periods, setPeriods] = useState<Record<string, PeriodType>>({
     "000001.SH": "分时",
     "399001.SZ": "分时",
     "399006.SZ": "分时",
     "000680.SH": "分时",
   });
+
+  const toggleLayout = () => {
+    setGridCols(prev => {
+      if (prev === 4) return 1;
+      return prev + 1;
+    });
+  };
 
   //分时数据需 Pro+ (kline.minute.batch) 能力
   const caps = useCapabilities();
@@ -482,6 +491,7 @@ export function LiveIndices() {
     queryFn: () => api.indexQuotes(CORE_INDICES.map((i) => i.symbol)),
     placeholderData: (prev) => prev,
     refetchInterval: 5000,
+    refetchOnWindowFocus: false,
   });
 
   const batchMinute = useQuery({
@@ -490,6 +500,7 @@ export function LiveIndices() {
     enabled: hasMinuteCap,
     placeholderData: (prev) => prev,
     refetchInterval: 5000,
+    refetchOnWindowFocus: false,
   });
 
   // Fetch daily data for each index
@@ -507,6 +518,8 @@ export function LiveIndices() {
       }
       return results;
     },
+    placeholderData: (prev) => prev,
+    refetchOnWindowFocus: false,
   });
 
   const quoteBySymbol = useMemo(() => {
@@ -564,6 +577,22 @@ export function LiveIndices() {
     setPeriods(newPeriods);
   };
 
+  // 获取网格布局类名
+  const getGridColsClass = () => {
+    switch (gridCols) {
+      case 1:
+        return "grid-cols-1";
+      case 2:
+        return "grid-cols-1 md:grid-cols-2";
+      case 3:
+        return "grid-cols-1 md:grid-cols-3";
+      case 4:
+        return "grid-cols-1 md:grid-cols-4";
+      default:
+        return "grid-cols-1 md:grid-cols-3";
+    }
+  };
+
   return (
     <div className="h-full overflow-auto bg-base p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -574,6 +603,20 @@ export function LiveIndices() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* 排版按钮 */}
+          <button
+            onClick={toggleLayout}
+            className="inline-flex items-center gap-2 rounded-btn border border-border bg-surface px-3 py-1.5 text-xs font-medium text-foreground hover:bg-elevated transition-all"
+            title={`点击切换布局 (当前: 1行${gridCols}个)`}
+          >
+            <LayoutGrid className="h-3.5 w-3.5" />
+            <div className={`grid gap-0.5 ${gridCols === 1 ? 'grid-cols-1' : gridCols === 2 ? 'grid-cols-2' : gridCols === 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
+              {Array.from({ length: gridCols }).map((_, i) => (
+                <div key={i} className="w-2 h-2 rounded-sm bg-accent/60" />
+              ))}
+            </div>
+          </button>
+
           {/* Unified period selector */}
           <div className="flex flex-wrap gap-1">
             {PERIODS.map((p) => {
@@ -612,7 +655,7 @@ export function LiveIndices() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className={`grid ${getGridColsClass()} gap-4`}>
         {CORE_INDICES.map((index) => (
           <IndexCard
             key={index.symbol}
