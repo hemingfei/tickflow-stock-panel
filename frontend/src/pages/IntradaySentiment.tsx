@@ -367,7 +367,7 @@ export function IntradaySentiment() {
       </div>
 
       {latest ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3">
           <div className={cn(cardCls, 'p-3')}>
             <div className="flex items-center gap-1.5 text-[10px] text-muted">
               <Gauge className="h-3 w-3" />
@@ -387,19 +387,6 @@ export function IntradaySentiment() {
 
           <div className={cn(cardCls, 'p-3')}>
             <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Zap className="h-3 w-3" />
-              数据更新
-            </div>
-            <div className="mt-1.5 text-sm font-semibold text-foreground">
-              共 {rows.length} 条记录
-            </div>
-            <div className="mt-1 text-[10px] text-muted">
-              从 {rows[0]?.time} 到 {latest.time}
-            </div>
-          </div>
-
-          <div className={cn(cardCls, 'p-3')}>
-            <div className="flex items-center gap-1.5 text-[10px] text-muted">
               <Activity className="h-3 w-3" />
               六维拆解
             </div>
@@ -408,26 +395,6 @@ export function IntradaySentiment() {
                 { label: '指数', val: latest.index_score, color: '#3b82f6' },
                 { label: '赚钱', val: latest.profit_score, color: '#f59e0b' },
                 { label: '量能', val: latest.money_score, color: '#8b5cf6' },
-              ].map(d => (
-                <div key={d.label} className="flex items-center gap-1.5">
-                  <span className="w-6 shrink-0 text-[9px] text-muted">{d.label}</span>
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-base">
-                    <div className="h-full rounded-full transition-all"
-                      style={{ width: `${d.val ?? 0}%`, backgroundColor: d.color }} />
-                  </div>
-                  <span className="w-5 shrink-0 text-right text-[9px] font-mono text-muted">{d.val ?? '—'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className={cn(cardCls, 'p-3')}>
-            <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Activity className="h-3 w-3" />
-              更多维度
-            </div>
-            <div className="mt-2 space-y-1">
-              {[
                 { label: '投机', val: latest.speculation_score, color: '#a855f7' },
                 { label: '抗跌', val: latest.resilience_score, color: '#10b981' },
                 { label: '主线', val: latest.mainline_score, color: '#ec4899' },
