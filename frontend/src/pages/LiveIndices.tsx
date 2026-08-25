@@ -340,7 +340,6 @@ interface IndexCardProps {
   dailyLoading?: boolean;
   hasMinuteCap: boolean;
   period: PeriodType;
-  onPeriodChange: (p: PeriodType) => void;
 }
 
 function IndexCard({
@@ -353,7 +352,6 @@ function IndexCard({
   dailyLoading,
   hasMinuteCap,
   period,
-  onPeriodChange,
 }: IndexCardProps) {
   const current = quote?.last_price ?? quote?.price ?? quote?.close
   const changePct = quote?.change_pct ?? quote?.pct
@@ -565,10 +563,6 @@ export function LiveIndices() {
     }
   };
 
-  const handlePeriodChange = (symbol: string, period: PeriodType) => {
-    setPeriods((prev) => ({ ...prev, [symbol]: period }));
-  };
-
   const handleUnifiedPeriodChange = (period: PeriodType) => {
     const newPeriods: Record<string, PeriodType> = {};
     CORE_INDICES.forEach((index) => {
@@ -668,7 +662,6 @@ export function LiveIndices() {
             dailyLoading={dailyQueries.isPending}
             hasMinuteCap={hasMinuteCap}
             period={periods[index.symbol] || "1"}
-            onPeriodChange={(p) => handlePeriodChange(index.symbol, p)}
           />
         ))}
       </div>

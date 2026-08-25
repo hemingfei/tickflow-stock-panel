@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import {
-  Activity, RefreshCw, Loader2, Gauge, Clock, Zap
+  Activity, RefreshCw, Loader2, Gauge, Clock
 } from 'lucide-react'
 import {
   api, type IntradayRegimeRow,
@@ -114,7 +114,7 @@ export function IntradayRegime() {
   // 查询历史数据
   const history = useQuery({
     queryKey: ['intradayRegimeHistory', selectedDate],
-    queryFn: () => api.intradayRegimeHistory(selectedDate),
+    queryFn: () => api.intradayRegimeHistory(selectedDate ?? undefined),
     refetchInterval: selectedDate ? undefined : 60000, // 只有在查看今天时才自动刷新
   })
 
