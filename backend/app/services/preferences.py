@@ -5,12 +5,18 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
-import time
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# 进程内缓存: 行情轮询线程一轮会调用 8~12 次 getter, 每次读盘+parse 是纯重复;
+# 文件仅在用户改设置时变化, 以 (mtime_ns, size) 签名判断是否重读。
+_cache: dict | None = None
+_cache_sig: tuple[int, int] | None = None
 
 
 def _path() -> Path:
@@ -20,26 +26,32 @@ def _path() -> Path:
     return p
 
 
+def _invalidate_cache() -> None:
+    global _cache, _cache_sig
+    _cache = None
+    _cache_sig = None
+
+
 def load() -> dict:
+    """读取 preferences.json (带 mtime 签名缓存)。返回深拷贝, 调用方可自由修改。"""
+    global _cache, _cache_sig
     p = _path()
-    if p.exists():
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-            logger.warning("preferences.json is not a dict, resetting")
-        except json.JSONDecodeError as e:
-            logger.warning("preferences.json malformed JSON: %s, resetting", e)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("preferences.json malformed: %s, resetting", e)
-        # 如果出现任何问题，尝试备份并重置
-        try:
-            backup_path = p.parent / f"preferences.json.bak.{int(time.time())}"
-            p.rename(backup_path)
-            logger.info("Backed up corrupted preferences to %s", backup_path)
-        except Exception:
-            pass
-    return {}
+    try:
+        sig = (p.stat().st_mtime_ns, p.stat().st_size)
+    except OSError:
+        return {}
+    if _cache is not None and sig == _cache_sig:
+        return copy.deepcopy(_cache)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        logger.warning("preferences.json malformed: %s", e)
+        return {}
+    _cache = data
+    _cache_sig = sig
+    return copy.deepcopy(_cache)
 
 
 def save(updates: dict) -> dict:
@@ -49,6 +61,7 @@ def save(updates: dict) -> dict:
     _path().write_text(
         json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8",
     )
+    _invalidate_cache()
     return current
 
 
@@ -60,6 +73,11 @@ def get_indices_nav_pinned() -> bool:
     """侧栏指数报价卡片是否固定显示。默认 True（常驻）。
     关闭后，卡片跟随实时行情开关（仅实时开时显示）。"""
     return load().get("indices_nav_pinned", True)
+
+
+def get_watchlist_groups_in_nav() -> bool:
+    """自选分组是否显示在侧边栏（可展开二级子菜单）。默认 False。"""
+    return load().get("watchlist_groups_in_nav", False)
 
 
 def get_realtime_quote_interval() -> float:
@@ -96,6 +114,7 @@ def set_realtime_quote_interval(interval: float) -> float:
     _path().write_text(
         json.dumps(current, indent=2, ensure_ascii=False), encoding="utf-8",
     )
+    _invalidate_cache()
     return interval
 
 
@@ -199,6 +218,32 @@ def get_minute_sync_segment_days() -> int:
 # ===== 数据源选择 (默认 TickFlow；第一阶段仅日K切换入口) =====
 
 _ALLOWED_DATA_PROVIDERS = {"tickflow"}
+DATA_SOURCE_JOB_TIMEOUT_MIN_S = 60
+
+
+def get_data_source_job_timeout_s() -> int:
+    """返回普通数据后台任务的卡死判定时间(秒)。"""
+    from app.services.pipeline_jobs import DEFAULT_JOB_TIMEOUT_S
+    raw = load().get("data_source_job_timeout_s", DEFAULT_JOB_TIMEOUT_S)
+    try:
+        timeout_s = int(raw)
+    except (TypeError, ValueError):
+        timeout_s = DEFAULT_JOB_TIMEOUT_S
+    return max(DATA_SOURCE_JOB_TIMEOUT_MIN_S, timeout_s)
+
+
+def get_data_source_long_job_timeout_s() -> int:
+    """返回分钟 K 全市场等长任务的卡死判定时间(秒)。"""
+    from app.services.pipeline_jobs import LONG_JOB_TIMEOUT_S
+    raw = load().get(
+        "data_source_long_job_timeout_s",
+        LONG_JOB_TIMEOUT_S,
+    )
+    try:
+        timeout_s = int(raw)
+    except (TypeError, ValueError):
+        timeout_s = LONG_JOB_TIMEOUT_S
+    return max(DATA_SOURCE_JOB_TIMEOUT_MIN_S, timeout_s)
 
 
 def _allowed_data_providers() -> set[str]:
@@ -289,7 +334,7 @@ def get_regime_batch_days() -> int:
 def get_regime_warmup_days() -> int:
     """regime 分批每批的 warmup 前缀日历天数。默认 40。
 
-    用于预热 ma20 等滚动窗口指标，使每批边界计算正确。必须 > 20 交易日。
+    用于预热 ma20 等滚动窗口指标, 使每批边界计算正确。必须 > 20 交易日。
     """
     v = load().get("regime_warmup_days", 40)
     try:
@@ -298,30 +343,90 @@ def get_regime_warmup_days() -> int:
         return 40
 
 
-def get_pipeline_sentiment_enabled() -> bool:
-    """盘后管道是否自动计算情绪周期(sentiment)。默认 False。
-
-    sentiment 是本地聚合计算(非拉取), 首次/sentiment 表为空时需全量回填
-    多日, 内存与耗时较高, 故默认关闭; 用户可在数据页「情绪周期」卡片设置里开启,
-    或直接在该页面点「重算」手动触发(不受此开关影响)。
-    """
-    return load().get("pipeline_sentiment_enabled", False)
-
-
-_SENTIMENT_BATCH_DAYS_MIN = 25
-_SENTIMENT_BATCH_DAYS_MAX = 500
+# ── 市场主线(概念/行业涨停梯队)过滤 ──
+# 宽基/风格标签(融资融券 ~7700 成分、深股通/沪股通 ~3300-3700、国企改革 ~2900)
+# 会按"家数"霸占主线榜首, 但它们不是可操作的题材主线。默认按成分股数上限过滤。
+# 标定(2026-08 THS 概念): 成员 >600 的 55 个概念几乎全是此类风格标签,
+# 真实题材(华为概念 2006/人工智能 2166/固态电池等)均在 600 以下或可自行调整。
+_MAINLINE_MAX_MEMBERS_MIN = 50
+_MAINLINE_MAX_MEMBERS_MAX = 5000
+_MAINLINE_MIN_MEMBERS_MIN = 1
+_MAINLINE_MIN_MEMBERS_MAX = 200
 
 
-def get_sentiment_batch_days() -> int:
-    """sentiment 全量回填每批目标交易日数。默认 60(约一季度)。
-
-    超过此天数的范围会被切成多批, 每批独立算指标后拼接, 控制内存峰值。
-    """
-    v = load().get("sentiment_batch_days", 60)
+def get_mainline_max_members() -> int:
+    """主线维度成员数上限, 超过视为宽基/风格标签被过滤。默认 600。"""
+    v = load().get("mainline_max_members", 600)
     try:
-        return max(_SENTIMENT_BATCH_DAYS_MIN, min(_SENTIMENT_BATCH_DAYS_MAX, int(v)))
+        return max(_MAINLINE_MAX_MEMBERS_MIN, min(_MAINLINE_MAX_MEMBERS_MAX, int(v)))
     except (TypeError, ValueError):
-        return 60
+        return 600
+
+
+def get_mainline_min_members() -> int:
+    """主线维度成员数下限, 过滤微型标签。默认 4。"""
+    v = load().get("mainline_min_members", 4)
+    try:
+        return max(_MAINLINE_MIN_MEMBERS_MIN, min(_MAINLINE_MIN_MEMBERS_MAX, int(v)))
+    except (TypeError, ValueError):
+        return 4
+
+
+def get_mainline_blacklist() -> list[str]:
+    """用户自定义屏蔽的维度成员名(不论成员数大小)。默认空。
+
+    保存时接受 list 或逗号/顿号/分号/空白分隔的字符串。
+    """
+    v = load().get("mainline_blacklist", [])
+    if isinstance(v, str):
+        v = [part for part in re.split(r"[,，、;；\s]+", v) if part]  # noqa: RUF001
+    if not isinstance(v, list):
+        return []
+    return [str(x).strip() for x in v if str(x).strip()]
+
+
+def get_sentiment_exclude_st() -> bool:
+    """市场环境/主线统计是否剔除风险警示(ST)股。默认 True。
+
+    口径: 主板 ST 在 2026-07 前享 5% 涨跌幅(封板成本减半), 且 ST 是跨行业的
+    状态桶而非投资题材, 混入会系统性抬高涨停宽度/高度(弱市尤甚)。剔除后
+    涨跌家数等宽度占比几乎不受影响。修改后需重算 regime 与主线生效。
+    """
+    return bool(load().get("sentiment_exclude_st", True))
+
+
+def set_sentiment_exclude_st(v: bool) -> bool:
+    save({"sentiment_exclude_st": bool(v)})
+    return get_sentiment_exclude_st()
+
+
+def get_mainline_filter_config() -> dict:
+    """主线过滤配置汇总(供 API 返回与计算读取)。"""
+    return {
+        "min_members": get_mainline_min_members(),
+        "max_members": get_mainline_max_members(),
+        "blacklist": get_mainline_blacklist(),
+        "exclude_st": get_sentiment_exclude_st(),
+    }
+
+
+def set_mainline_filter_config(cfg: dict) -> dict:
+    """保存主线过滤配置(白名单字段, 部分更新)。修改后需重算主线生效。"""
+    updates: dict = {}
+    if "min_members" in cfg and cfg["min_members"] is not None:
+        updates["mainline_min_members"] = cfg["min_members"]
+    if "max_members" in cfg and cfg["max_members"] is not None:
+        updates["mainline_max_members"] = cfg["max_members"]
+    if "exclude_st" in cfg and cfg["exclude_st"] is not None:
+        updates["sentiment_exclude_st"] = bool(cfg["exclude_st"])
+    if "blacklist" in cfg and cfg["blacklist"] is not None:
+        raw = cfg["blacklist"]
+        if isinstance(raw, str):
+            raw = [part for part in re.split(r"[,，、;；\s]+", raw) if part]  # noqa: RUF001
+        updates["mainline_blacklist"] = [str(x).strip() for x in (raw or []) if str(x).strip()]
+    if updates:
+        save(updates)
+    return get_mainline_filter_config()
 
 
 _PIPELINE_PULL_KEYS = ("pipeline_pull_etf", "pipeline_pull_index")
@@ -481,6 +586,43 @@ def set_review_schedule(enabled: bool, hour: int, minute: int) -> dict:
         h, m = 15, 0
     save({"review_schedule": {"enabled": bool(enabled), "hour": h, "minute": m}})
     return {"enabled": bool(enabled), "hour": h, "minute": m}
+
+
+MINING_BUDGET_PROFILES = frozenset({"balanced", "strict"})
+
+
+def get_mining_schedule() -> dict:
+    """返回周度自动 mining 配置。历史配置缺字段时默认关闭。"""
+    data = load()
+    weekday = data.get("mining_schedule_weekday", 4)
+    if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday <= 4:
+        weekday = 4
+    profile = data.get("mining_budget_profile", "balanced")
+    if not isinstance(profile, str) or profile not in MINING_BUDGET_PROFILES:
+        profile = "balanced"
+    enabled = data.get("mining_schedule_enabled", False)
+    if not isinstance(enabled, bool):
+        enabled = False
+    return {
+        "mining_schedule_enabled": enabled,
+        "mining_schedule_weekday": weekday,
+        "mining_budget_profile": profile,
+    }
+
+
+def set_mining_schedule(enabled: bool, weekday: int, profile: str) -> dict:
+    """校验并一次写入周度自动 mining 的整组配置。"""
+    if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday <= 4:
+        raise ValueError("mining schedule weekday must be between 0 and 4")
+    if profile not in MINING_BUDGET_PROFILES:
+        raise ValueError("mining budget profile must be balanced or strict")
+    result = {
+        "mining_schedule_enabled": bool(enabled),
+        "mining_schedule_weekday": weekday,
+        "mining_budget_profile": profile,
+    }
+    save(result)
+    return result
 
 
 def get_review_push_channels() -> list[str]:
@@ -848,17 +990,6 @@ def set_screener_result_columns(columns: list[dict]) -> list[dict]:
     return columns
 
 
-def get_watchlist_groups_columns() -> list[dict] | None:
-    """返回自选板块列表列配置。"""
-    return load().get("watchlist_groups_columns")
-
-
-def set_watchlist_groups_columns(columns: list[dict]) -> list[dict]:
-    """保存自选板块列表列配置。"""
-    save({"watchlist_groups_columns": columns})
-    return columns
-
-
 # ===== 首次使用引导 =====
 
 def get_onboarding_completed() -> bool:
@@ -885,71 +1016,3 @@ def set_financial_sync_time(table: str, iso_ts: str) -> None:
     times = get_financial_sync_times()
     times[table] = iso_ts
     save({"financial_sync_times": times})
-
-
-# ===== 自选板块设置 =====
-
-def get_watchlist_groups_view_mode() -> str:
-    """获取板块视图模式: 'sidebar' (侧边栏+单板块) 或 'cards' (多板块卡片)。"""
-    try:
-        return str(load().get("watchlist_groups_view_mode", "sidebar")).strip()
-    except Exception as e:
-        logger.warning("Error getting watchlist_groups_view_mode: %s", e)
-        return "sidebar"
-
-
-def set_watchlist_groups_view_mode(mode: str) -> str:
-    """保存板块视图模式。"""
-    try:
-        mode = str(mode).strip()
-        if mode not in ["sidebar", "cards"]:
-            mode = "sidebar"
-        save({"watchlist_groups_view_mode": mode})
-        return mode
-    except Exception as e:
-        logger.warning("Error setting watchlist_groups_view_mode: %s", e)
-        return "sidebar"
-
-
-def get_watchlist_groups_display_style() -> str:
-    """获取板块展示样式: 'compact' (精简), 'standard' (标准), 'detailed' (详细)。"""
-    try:
-        return str(load().get("watchlist_groups_display_style", "standard")).strip()
-    except Exception as e:
-        logger.warning("Error getting watchlist_groups_display_style: %s", e)
-        return "standard"
-
-
-def set_watchlist_groups_display_style(style: str) -> str:
-    """保存板块展示样式。"""
-    try:
-        style = str(style).strip()
-        if style not in ["compact", "standard", "detailed"]:
-            style = "standard"
-        save({"watchlist_groups_display_style": style})
-        return style
-    except Exception as e:
-        logger.warning("Error setting watchlist_groups_display_style: %s", e)
-        return "standard"
-
-
-def get_watchlist_groups_avg_pct_mode() -> str:
-    """获取平均涨跌幅计算模式: 'simple' (算术平均) 或 'weighted' (加权平均)。"""
-    try:
-        return str(load().get("watchlist_groups_avg_pct_mode", "simple")).strip()
-    except Exception as e:
-        logger.warning("Error getting watchlist_groups_avg_pct_mode: %s", e)
-        return "simple"
-
-
-def set_watchlist_groups_avg_pct_mode(mode: str) -> str:
-    """保存平均涨跌幅计算模式。"""
-    try:
-        mode = str(mode).strip()
-        if mode not in ["simple", "weighted"]:
-            mode = "simple"
-        save({"watchlist_groups_avg_pct_mode": mode})
-        return mode
-    except Exception as e:
-        logger.warning("Error setting watchlist_groups_avg_pct_mode: %s", e)
-        return "simple"

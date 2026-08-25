@@ -208,21 +208,21 @@ export const SUB_CHARTS: SubChartDef[] = [
         lineStyle: { width: 1, color: '#8B5CF6' },
         itemStyle: { color: '#8B5CF6' },
       },
-        {
-          name: 'MACD',
-          type: 'bar',
-          data: data.map(d => {
-            const v = d.macd_hist
-            if (v == null) return '-'
-            const THEME = getTHEME()
-            return {
-              value: Number(v),
-              itemStyle: { color: Number(v) >= 0 ? THEME.bullAlpha : THEME.bearAlpha },
-            }
-          }),
-          barWidth: '40%',
-          animation: false,
-        },
+      {
+        name: 'MACD',
+        type: 'bar',
+        data: data.map(d => {
+          const v = d.macd_hist
+          if (v == null) return '-'
+          const THEME = getTHEME()
+          return {
+            value: Number(v),
+            itemStyle: { color: Number(v) >= 0 ? THEME.bullAlpha : THEME.bearAlpha },
+          }
+        }),
+        barWidth: '40%',
+        animation: false,
+      },
     ],
     buildInfo: (d) => {
       if (!d) return []
@@ -337,6 +337,7 @@ interface Props {
   symbol?: string
   linkedPrice?: number | null
   onDateClick?: (date: string) => void
+  onPriceDoubleClick?: (price: number, currentPrice: number) => void
   /** 默认可见蜡烛根数, 默认 60 */
   visibleBars?: number
   /** 已激活的子图 key 列表 (含 vol, 按点击顺序) */
@@ -385,7 +386,7 @@ function hexToRgb(hex: string) {
   } : null
 }
 
-/** 当前主题的图表调色板 (buildOption/信息栏在渲染时调用; 主题切换由组件 effect 触发重建)。 */
+/** 当前主题的图表调色板 (buildOption/信息栏在渲染时调用; 主题切换由组件 effect 触发重建) */
 const CT = () => chartTheme(getTheme())
 
 /** 可见蜡烛超过此数量时，涨停/炸板标签切换为小圆点。 */
@@ -423,15 +424,15 @@ function buildSubInfoGraphics(
       const vol10 = calcVolMa(10)
       items.push({ label: 'VOL5', color: '#FACC15', value: fmtVol(vol5) })
       items.push({ label: 'VOL10', color: '#8B5CF6', value: fmtVol(vol10) })
-        if (volumeCompare.enabled) {
-          const ratio = volumeRatioAt(data, infoIdx, volumeCompare.days)
-          const THEME = getTHEME()
-          items.push({
-            label: `量比${volumeCompare.days}`,
-            color: ratio != null && ratio >= 1 ? THEME.bull : THEME.bear,
-            value: fmtVolumeRatio(ratio),
-          })
-        }
+      if (volumeCompare.enabled) {
+        const ratio = volumeRatioAt(data, infoIdx, volumeCompare.days)
+        const THEME = getTHEME()
+        items.push({
+          label: `量比${volumeCompare.days}`,
+          color: ratio != null && ratio >= 1 ? THEME.bull : THEME.bear,
+          value: fmtVolumeRatio(ratio),
+        })
+      }
     }
 
     // 每个元素加固定 id，确保 ECharts 增量更新时能正确匹配
@@ -560,7 +561,7 @@ function buildOption(
     }
   }
 
-  // ====== 布局计算 ======
+  // ===== 布局计算 =====
   const left = 60
   const right = 20
   const topPad = 8
@@ -583,6 +584,24 @@ function buildOption(
   const yAxes: any[] = []
   const series: any[] = []
   const xAxisIndices: number[] = []
+
+  const priceLineValues = (priceLines ?? [])
+    .map(line => line.value)
+    .filter(value => Number.isFinite(value) && value > 0)
+  const axisMin = priceLineValues.length > 0
+    ? ({ min, max }: { min: number; max: number }) => {
+        const nextMin = Math.min(min, ...priceLineValues)
+        const nextMax = Math.max(max, ...priceLineValues)
+        return nextMin - Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
+      }
+    : undefined
+  const axisMax = priceLineValues.length > 0
+    ? ({ min, max }: { min: number; max: number }) => {
+        const nextMin = Math.min(min, ...priceLineValues)
+        const nextMax = Math.max(max, ...priceLineValues)
+        return nextMax + Math.max((nextMax - nextMin) * 0.03, nextMax * 0.001)
+      }
+    : undefined
 
   // ===== grid 0: K线主图 =====
   grids.push({ left, right, top: topPad, height: candleAvail })
@@ -618,6 +637,8 @@ function buildOption(
   })
   yAxes.push({
     scale: true,
+    min: axisMin,
+    max: axisMax,
     // 上下各留 3% 边距: 防止最高/最低点的蜡烛贴边, 涨停/炸板标签被遮挡
     boundaryGap: [0.03, 0.03],
     splitArea: { show: false },
@@ -750,7 +771,7 @@ function buildOption(
   if (showBOLL) {
     const bollLine = (key: keyof OHLC, color: string, name: string) => ({
       name, type: 'line',
-      data: data.map(d => (d[key] != null ? Number(d[key]) : '-')),
+      data: data.map(d => d[key] != null ? Number(d[key]) : '-'),
       smooth: true, symbol: 'none', animation: false,
       silent: true,
       lineStyle: { width: 1, color, type: 'dashed' as const }, itemStyle: { color },
@@ -849,7 +870,6 @@ function buildOption(
   }
 }
 
-
 export function EChartsCandlestick({
   data,
   markers,
@@ -859,11 +879,12 @@ export function EChartsCandlestick({
   showMA = true,
   showInfoBar = true,
   showMarkers: showMarkersProp = true,
-  onToggleMarkers: _onToggleMarkers,
+  onToggleMarkers,
   stockInfo,
-  symbol: _symbol,
+  symbol,
   linkedPrice,
   onDateClick,
+  onPriceDoubleClick,
   visibleBars = 60,
   activeIndicators = [],
   volumeCompare = { enabled: true, days: 1 },
@@ -874,7 +895,10 @@ export function EChartsCandlestick({
   dataRef.current = data
   const onDateClickRef = useRef(onDateClick)
   onDateClickRef.current = onDateClick
+  const onPriceDoubleClickRef = useRef(onPriceDoubleClick)
+  onPriceDoubleClickRef.current = onPriceDoubleClick
   // 主题和价格颜色: 切换时触发重建
+  // 主题: buildOption/信息栏内部通过 CT() 动态取调色板, 这里只负责切换时触发重建
   const theme = useTheme()
   const priceColors = usePriceColors()
 
@@ -1061,6 +1085,18 @@ export function EChartsCandlestick({
       }
     })
 
+    const handlePriceDoubleClick = (event: { offsetX: number; offsetY: number }) => {
+      const pixel: [number, number] = [event.offsetX, event.offsetY]
+      if (!chart.containPixel({ gridIndex: 0 }, pixel)) return
+      const coordinate = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, pixel)
+      const price = Array.isArray(coordinate) ? Number(coordinate[1]) : NaN
+      const currentPrice = dataRef.current[dataRef.current.length - 1]?.close
+      if (Number.isFinite(price) && price > 0 && Number.isFinite(currentPrice) && currentPrice > 0) {
+        onPriceDoubleClickRef.current?.(price, currentPrice)
+      }
+    }
+    chart.getZr().on('dblclick', handlePriceDoubleClick)
+
     // dataZoom → 只更新 ref，不触发 React re-render
     // compact 变化时需要增量更新 markPoint
     chart.on('dataZoom', () => {
@@ -1086,6 +1122,7 @@ export function EChartsCandlestick({
       chart.off('updateAxisPointer')
       chart.off('click')
       chart.off('dataZoom')
+      chart.getZr().off('dblclick', handlePriceDoubleClick)
       ro.disconnect()
       chart.dispose()
       chartRef.current = null
@@ -1211,7 +1248,7 @@ export function EChartsCandlestick({
     html += `<span style="color:${CT().text}">低</span>`
     html += `<span style="color:${THEME.bear}">${d.low.toFixed(2)}</span>`
     html += `<span style="color:${CT().text}">收</span>`
-    const prevClose0 = data[idx-1]?.close ?? d.close
+    const prevClose0 = data[idx - 1]?.close ?? d.close
     const clr0 = d.close >= prevClose0 ? THEME.bull : THEME.bear
     html += `<span style="color:${clr0};font-weight:600">${d.close.toFixed(2)}</span>`
     // 涨跌幅 (收盘后, 换手前; 和收间隔一些距离)
