@@ -12,6 +12,7 @@ from app.services.intraday_sentiment import (
     INTRADAY_SENTIMENT_DIR,
     get_intraday_sentiment_service,
     is_trading_time,
+    should_record_now,
     load_intraday_sentiment,
 )
 

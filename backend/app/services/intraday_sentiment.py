@@ -29,6 +29,9 @@ MORNING_START = (9, 30)
 MORNING_END = (11, 30)
 AFTERNOON_START = (13, 0)
 AFTERNOON_END = (15, 0)
+AUCTION_START = (9, 15)
+AUCTION_END = (9, 25)
+POST_CLOSE_END = (15, 5)
 
 
 def is_trading_time(dt: datetime | None = None) -> bool:
@@ -40,12 +43,55 @@ def is_trading_time(dt: datetime | None = None) -> bool:
     if dt.weekday() >= 5:
         return False
     
+    # 集合竞价 9:15-9:25
+    if (hour == AUCTION_START[0] and minute >= AUCTION_START[1]) or (hour > AUCTION_START[0] and hour < AUCTION_END[0]) or (hour == AUCTION_END[0] and minute <= AUCTION_END[1]):
+        return True
+    
     # 上午时段 9:30-11:30
     if (hour == MORNING_START[0] and minute >= MORNING_START[1]) or (hour > MORNING_START[0] and hour < MORNING_END[0]) or (hour == MORNING_END[0] and minute <= MORNING_END[1]):
         return True
     
     # 下午时段 13:00-15:00
     if (hour == AFTERNOON_START[0] and minute >= AFTERNOON_START[1]) or (hour > AFTERNOON_START[0] and hour < AFTERNOON_END[0]) or (hour == AFTERNOON_END[0] and minute <= AFTERNOON_END[1]):
+        return True
+    
+    # 收盘后 15:00-15:05
+    if (hour == 15 and minute <= 5):
+        return True
+    
+    return False
+
+
+def should_record_now(dt: datetime | None = None) -> bool:
+    """判断当前时刻是否应该记录情绪数据。"""
+    dt = dt or cn_now()
+    hour, minute, second = dt.hour, dt.minute, dt.second
+    
+    # 首先检查是否在交易时段内
+    if not is_trading_time(dt):
+        return False
+    
+    # 特定秒点记录（精确匹配）
+    special_times = [
+        (9, 15, 10), (9, 15, 20),
+        (9, 25, 10), (9, 25, 20),
+        (9, 30, 10), (9, 30, 20),
+        (15, 0, 10), (15, 0, 20),
+    ]
+    if (hour, minute, second) in special_times:
+        return True
+    
+    # 9:15-9:25 期间每一分钟的 0 秒左右
+    if (hour == 9 and 15 <= minute <= 25) and second < 10:
+        return True
+    
+    # 15:00-15:05 期间每一分钟的 0 秒左右
+    if (hour == 15 and minute <= 5) and second < 10:
+        return True
+    
+    # 常规交易时段（9:30-11:30 和 13:00-15:00）每一分钟的 0 秒左右
+    if ((hour == 9 and minute >= 30) or (10 <= hour <= 10) or (hour == 11 and minute <= 30) or 
+        (13 <= hour <= 14) or (hour == 15 and minute == 0)) and second < 10:
         return True
     
     return False
@@ -170,9 +216,15 @@ def _compute_intraday_sentiment_impl(repo, depth_service=None) -> dict[str, Any]
         )
         
         if record:
-            # 添加分钟级时间信息
+            # 添加时间信息（支持秒级）
             timestamp = int(now.timestamp() * 1000)
-            time_str = now.strftime("%H:%M")
+            # 对于特定秒点显示完整时间，其他显示分钟即可
+            special_seconds = [10, 20]
+            if (now.hour == 9 and now.minute in [15, 25, 30] and now.second in special_seconds) or \
+               (now.hour == 15 and now.minute == 0 and now.second in special_seconds):
+                time_str = now.strftime("%H:%M:%S")
+            else:
+                time_str = now.strftime("%H:%M")
             record["timestamp"] = timestamp
             record["time"] = time_str
         
@@ -244,11 +296,11 @@ class IntradaySentimentService:
             try:
                 now = cn_now()
                 
-                # 仅在交易时段计算（每分钟的0秒左右）
-                if is_trading_time(now) and now.second < 10:
-                    # 检查距离上次计算是否超过50秒（避免重复）
+                # 使用新的 should_record_now 判断是否需要记录
+                if should_record_now(now):
+                    # 检查距离上次计算是否超过5秒（避免重复，因为现在支持秒级记录）
                     if (self._last_calculation_time is None or 
-                        (now - self._last_calculation_time).total_seconds() > 50):
+                        (now - self._last_calculation_time).total_seconds() > 5):
                         self.compute_now()
                 
                 # 每秒检查一次
