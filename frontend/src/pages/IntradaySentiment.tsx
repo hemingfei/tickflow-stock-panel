@@ -13,6 +13,7 @@ import {
 import { useChartTheme } from '@/lib/theme'
 import { toast } from '@/components/Toast'
 import { cn } from '@/lib/cn'
+import { DatePicker } from '@/components/DatePicker'
 
 /** 情绪标签颜色映射 */
 const EMOTION_COLORS: Record<string, string> = {
@@ -93,20 +94,27 @@ const cardCls = 'rounded-card border border-border bg-surface/80 shadow-[0_1px_2
 export function IntradaySentiment() {
   const qc = useQueryClient()
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const ct = useChartTheme()
+
+  // 查询可用日期
+  const dates = useQuery({
+    queryKey: ['intradaySentimentDates'],
+    queryFn: () => api.intradaySentimentDates(),
+  })
 
   // 查询状态
   const status = useQuery({
     queryKey: ['intradaySentimentStatus'],
     queryFn: () => api.intradaySentimentStatus(),
-    refetchInterval: 30000, // 30秒刷新一次
+    refetchInterval: 30000, // 30 秒刷新一次
   })
 
   // 查询历史数据
   const history = useQuery({
-    queryKey: ['intradaySentimentHistory'],
-    queryFn: () => api.intradaySentimentHistory(),
-    refetchInterval: 60000, // 1分钟刷新一次
+    queryKey: ['intradaySentimentHistory', selectedDate],
+    queryFn: () => api.intradaySentimentHistory(selectedDate),
+    refetchInterval: selectedDate ? undefined : 60000, // 只有在查看今天时才自动刷新
   })
 
   const rows: IntradaySentimentRow[] = history.data?.data ?? []
@@ -318,11 +326,30 @@ export function IntradaySentiment() {
     <div className="mx-auto max-w-[1440px] px-4 py-5 space-y-4">
       <div className={cn(cardCls, 'relative overflow-hidden rounded-card bg-gradient-to-r from-surface/90 to-surface/70 px-4 py-3')}>
         <div className="absolute left-0 top-0 h-full w-1 bg-gradient-to-b from-accent to-accent/20" />
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <Activity className="h-5 w-5 text-accent" />
           <h1 className="text-base font-semibold text-foreground">实时情绪</h1>
           <span className="text-xs text-muted">分钟级情绪分时 · 实时更新</span>
-          <div className="ml-auto flex items-center gap-2">
+          
+          {/* 日期选择器 */}
+          <div className="flex items-center gap-2 ml-auto">
+            <DatePicker
+              value={selectedDate || ''}
+              onChange={(date) => setSelectedDate(date || null)}
+              placeholder="选择日期"
+              enabledDates={dates.data?.dates}
+            />
+            
+            {/* 如果选择了日期，添加清除按钮 */}
+            {selectedDate && (
+              <button
+                onClick={() => setSelectedDate(null)}
+                className="inline-flex items-center justify-center h-7 w-7 rounded-btn border border-border bg-base text-xs text-secondary hover:text-accent"
+              >
+                ×
+              </button>
+            )}
+            
             <div className={cn(
               'flex items-center gap-1 px-2 py-1 rounded-full text-xs',
               status.data?.trading_time ? 'bg-green-100/20 text-green-500' : 'bg-gray-100/20 text-gray-500'
@@ -330,7 +357,7 @@ export function IntradaySentiment() {
               <Clock className="h-3 w-3" />
               {status.data?.trading_time ? '交易时段' : '非交易时段'}
             </div>
-            <button onClick={handleRefresh} disabled={isRefreshing}
+            <button onClick={handleRefresh} disabled={isRefreshing || !!selectedDate}
               className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn border border-border bg-base text-xs text-secondary hover:text-accent disabled:opacity-50">
               {isRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
               {isRefreshing ? '更新中…' : '立即更新'}

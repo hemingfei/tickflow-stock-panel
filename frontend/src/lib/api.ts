@@ -1822,6 +1822,9 @@ export const api = {
     const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : ''
     return request<{ data: IntradaySentimentRow[]; count: number }>(`/api/sentiment/intraday/history${qs}`)
   },
+  intradaySentimentDates: () => {
+    return request<{ dates: string[] }>('/api/sentiment/intraday/dates')
+  },
   intradaySentimentStatus: () => request<IntradaySentimentStatus>('/api/sentiment/intraday/status'),
   intradaySentimentCompute: (force: boolean = false) => 
     request<{ ok: boolean; data: IntradaySentimentRow | null }>(`/api/sentiment/intraday/compute?force=${force}`, { method: 'POST' }),

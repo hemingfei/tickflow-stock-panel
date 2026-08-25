@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
 from app.services.intraday_sentiment import (
+    INTRADAY_SENTIMENT_DIR,
     get_intraday_sentiment_service,
     is_trading_time,
     load_intraday_sentiment,
@@ -55,3 +57,40 @@ def intraday_sentiment_compute(request: Request, force: bool = Query(False)):
     service.set_depth_service(getattr(request.app.state, "depth_service", None))
     result = service.compute_now(force=force)
     return {"success": result is not None, "data": result}
+
+
+@router.get("/dates")
+def intraday_sentiment_dates(request: Request):
+    """获取可用的日期列表。"""
+    repo = request.app.state.repo
+    data_dir = Path(repo.store.data_dir) / INTRADAY_SENTIMENT_DIR
+    
+    if not data_dir.exists():
+        return {"dates": []}
+    
+    dates = []
+    
+    # 扫描 .parquet 文件
+    for file in data_dir.glob("*.parquet"):
+        date_str = file.stem
+        try:
+            # 验证日期格式
+            parsed_date = date.fromisoformat(date_str)
+            dates.append(parsed_date)
+        except ValueError:
+            pass
+    
+    # 扫描 date=YYYY-MM-DD 目录
+    for dir_path in data_dir.glob("date=*"):
+        date_str = dir_path.name.replace("date=", "")
+        try:
+            # 验证日期格式
+            parsed_date = date.fromisoformat(date_str)
+            dates.append(parsed_date)
+        except ValueError:
+            pass
+    
+    # 去重并按日期降序排序
+    unique_dates = sorted(list(set(dates)), reverse=True)
+    
+    return {"dates": [d.isoformat() for d in unique_dates]}

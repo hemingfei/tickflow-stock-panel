@@ -19,6 +19,7 @@ interface DatePickerProps {
   className?: string
   buttonClassName?: string
   align?: 'left' | 'right'
+  enabledDates?: string[]  // 只有这些日期可以选择
 }
 
 const WEEKDAYS = ['一', '二', '三', '四', '五', '六', '日']
@@ -48,6 +49,7 @@ export function DatePicker({
   className = '',
   buttonClassName = '',
   align = 'right',
+  enabledDates,
 }: DatePickerProps) {
   const [open, setOpen] = useState(false)
   const [showYearPicker, setShowYearPicker] = useState(false)
@@ -129,6 +131,9 @@ export function DatePicker({
   const prevMonthDays = new Date(viewYear, viewMonth, 0).getDate()
 
   const cells: { day: number; cur: boolean; dateStr: string; disabled: boolean }[] = []
+  
+  // 快速查找 enabledDates 的 Set
+  const enabledSet = enabledDates ? new Set(enabledDates) : null
 
   // 上月尾部
   for (let i = offset - 1; i >= 0; i--) {
@@ -136,12 +141,16 @@ export function DatePicker({
     const m = viewMonth === 0 ? 11 : viewMonth - 1
     const y = viewMonth === 0 ? viewYear - 1 : viewYear
     const ds = toDateStr(y, m, d)
-    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    const dateDisabled = !!min && ds < min || !!max && ds > max
+    const enabledDisabled = enabledSet ? !enabledSet.has(ds) : false
+    cells.push({ day: d, cur: false, dateStr: ds, disabled: dateDisabled || enabledDisabled })
   }
   // 当月
   for (let d = 1; d <= daysInMonth; d++) {
     const ds = toDateStr(viewYear, viewMonth, d)
-    cells.push({ day: d, cur: true, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    const dateDisabled = !!min && ds < min || !!max && ds > max
+    const enabledDisabled = enabledSet ? !enabledSet.has(ds) : false
+    cells.push({ day: d, cur: true, dateStr: ds, disabled: dateDisabled || enabledDisabled })
   }
   // 下月头部 — 补齐到 6 行 × 7 = 42
   const remain = 42 - cells.length
@@ -149,7 +158,9 @@ export function DatePicker({
     const m = viewMonth === 11 ? 0 : viewMonth + 1
     const y = viewMonth === 11 ? viewYear + 1 : viewYear
     const ds = toDateStr(y, m, d)
-    cells.push({ day: d, cur: false, dateStr: ds, disabled: !!min && ds < min || !!max && ds > max })
+    const dateDisabled = !!min && ds < min || !!max && ds > max
+    const enabledDisabled = enabledSet ? !enabledSet.has(ds) : false
+    cells.push({ day: d, cur: false, dateStr: ds, disabled: dateDisabled || enabledDisabled })
   }
 
   const displayLabel = value || placeholder
