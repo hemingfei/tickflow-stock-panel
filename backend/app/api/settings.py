@@ -457,6 +457,7 @@ def get_preferences() -> dict:
             "depth_finalize_time": preferences.get_depth_finalize_time(),
             "review_schedule": preferences.get_review_schedule(),
             "review_push_channels": preferences.get_review_push_channels(),
+            "webhook_push_schedule": preferences.get_webhook_push_schedule(),
             # Watchlist groups settings
             "watchlist_groups_view_mode": preferences.get_watchlist_groups_view_mode(),
             "watchlist_groups_display_style": preferences.get_watchlist_groups_display_style(),
@@ -964,6 +965,88 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
         )
     saved_url = preferences.set_wecom_webhook_url(url)
     return {"wecom_webhook_url": saved_url}
+
+
+class WebhookPushWindowIn(BaseModel):
+    """单个推送时间窗: 北京时间 HH:MM 闭区间 + 该窗独立的推送间隔分钟。"""
+
+    start_time: str = "09:30"
+    end_time: str = "11:30"
+    interval_minutes: int = Field(default=5, ge=1, le=120)
+
+
+class WebhookPushScheduleIn(BaseModel):
+    enabled: bool = False
+    format: str = "generic"
+    webhook_url: str = ""
+    feishu_secret: str = ""
+    # 时间窗列表, 至少 1 个; 上限在 preferences 层校验 (WEBHOOK_PUSH_MAX_WINDOWS)
+    windows: list[WebhookPushWindowIn] = Field(
+        default_factory=lambda: [WebhookPushWindowIn()], min_length=1)
+
+
+@router.put("/preferences/webhook-push-schedule")
+def update_webhook_push_schedule(req: WebhookPushScheduleIn) -> dict:
+    """看板快照定时推送配置 — 推送格式 + 时间窗列表 + 每窗独立间隔分钟。
+
+    - format: generic=原样 POST 快照 JSON (任意 http/s 地址);
+      feishu=按飞书自定义机器人规范发 interactive 卡片 (地址须为飞书 hook 地址);
+      kol=系统 KOL Webhook 简化格式 {"text","title","msg_id"} (任意 http/s 地址)。
+      feishu_secret 为签名密钥 (飞书签名校验 / KOL Webhook 同一算法), 未配则留空。
+    - windows: 时间窗数量可配置 (至少 1 个, 至多 WEBHOOK_PUSH_MAX_WINDOWS 个),
+      每窗需 开始 < 结束; 触发时刻为 开始时间 + N*间隔 (N>=1, 开始本身不触发)。
+    - 保存即生效: 定时 job 每分钟重读本配置, 无需重启或重新注册调度任务。
+    """
+    from app.services import preferences
+
+    try:
+        saved = preferences.set_webhook_push_schedule(
+            enabled=req.enabled,
+            webhook_url=req.webhook_url,
+            windows=[w.model_dump() for w in req.windows],
+            format=req.format,
+            feishu_secret=req.feishu_secret,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"webhook_push_schedule": saved}
+
+
+class WebhookPushTestIn(BaseModel):
+    webhook_url: str = ""
+    format: str = ""
+    feishu_secret: str = ""
+
+
+@router.post("/webhook-push-test")
+def test_webhook_push(req: WebhookPushTestIn, request: Request) -> dict:
+    """立即构建一次看板快照并发送, 用于保存前验证 Webhook 连通性。
+
+    - 传 format (前端「测试推送」总传当前表单草稿): 按 format/feishu_secret/webhook_url
+      的草稿值发送, 与保存后的实际推送行为完全一致;
+    - 只传 webhook_url (API 直接调用): 回退到已保存配置的格式与密钥。
+    返回 {ok, detail, snapshot_bytes, ...}。
+    """
+    from app.services import board_webhook_push, preferences
+
+    saved = preferences.get_webhook_push_schedule()
+    url = (req.webhook_url or "").strip() or str(saved.get("webhook_url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="请先填写 Webhook 地址, 或先保存配置后再测试")
+    cfg = dict(saved)
+    cfg["webhook_url"] = url
+    if (req.format or "").strip():
+        cfg["format"] = req.format.strip()
+        cfg["feishu_secret"] = (req.feishu_secret or "").strip()
+    # 同步 def 端点在线程池执行, 快照构建 + 网络请求不阻塞事件循环
+    return board_webhook_push.push_now(request.app.state, cfg=cfg)
+
+
+@router.get("/webhook-push-status")
+def webhook_push_status() -> dict:
+    """看板定时推送最近执行状态 (内存态, 重启后清零)。"""
+    from app.services import board_webhook_push
+    return board_webhook_push.get_push_status()
 
 
 class WecomBotPrefsIn(BaseModel):

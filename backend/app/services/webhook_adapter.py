@@ -324,7 +324,7 @@ def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
         body_md:     markdown 正文
 
     Returns:
-        True=成功送达, False=失败或 URL 非法。
+        True=成功送达, False=失败。
     """
     webhook_url = normalize_wecom_url(webhook_url)
     if not is_valid_wecom_url(webhook_url):
@@ -339,4 +339,57 @@ def send_wecom_markdown(webhook_url: str, title: str, body_md: str) -> bool:
 
     payload: dict = {"msgtype": "markdown", "markdown": {"content": content}}
     return _post_wecom(webhook_url, payload)
+
+
+# ================================================================
+# 通用 Webhook (任意 HTTP 地址 POST JSON)
+# ================================================================
+#
+# 与飞书/企业微信渠道不同: 不限定供应商, 不包装消息格式, 原样 POST 用户
+# 指定的 JSON payload (如看板快照), HTTP 2xx 即视为成功。供「看板定时推送」
+# 等需要把结构化数据发给任意下游 (n8n / 自建服务 / 群机器人网关) 的场景。
+
+
+def is_valid_http_url(url: str) -> bool:
+    """校验是否为可发送的 http(s) 地址 (通用 Webhook 不限定供应商前缀)。"""
+    url = (url or "").strip()
+    return url.startswith(("http://", "https://")) and len(url) > len("http://")
+
+
+_GENERIC_MAX_ATTEMPTS = 3
+
+
+def send_generic_webhook(webhook_url: str, payload: dict) -> tuple[bool, str]:
+    """把 JSON payload 原样 POST 到任意 http(s) Webhook 地址。
+
+    成功判定: HTTP 2xx (不解析响应体, 下游格式各异)。
+    瞬时失败 (网络/超时/5xx) 带退避重试, 4xx 客户端错误不重试。
+
+    Returns:
+        (ok, detail): ok=True 时 detail 为 "HTTP 200"; 失败时为可读原因,
+        供推送状态展示。失败只记 WARNING, 不抛异常 (Webhook 是辅助通道)。
+    """
+    if not is_valid_http_url(webhook_url):
+        return False, "Webhook 地址非法, 需以 http(s):// 开头"
+
+    import httpx
+
+    last_err = ""
+    for attempt in range(1, _GENERIC_MAX_ATTEMPTS + 1):
+        try:
+            resp = httpx.post(webhook_url, json=payload, timeout=5.0)
+            if 200 <= resp.status_code < 300:
+                return True, f"HTTP {resp.status_code}"
+            last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code < 500:
+                logger.warning("通用 Webhook 推送失败(不重试, 客户端错误): %s", last_err)
+                return False, last_err
+        except Exception as e:  # 网络/超时, 可重试
+            last_err = str(e)
+
+        if attempt < _GENERIC_MAX_ATTEMPTS:
+            time.sleep(min(2 ** (attempt - 1), 3))  # 退避: 1s, 2s
+
+    logger.warning("通用 Webhook 推送最终失败(已重试 %d 次): %s", _GENERIC_MAX_ATTEMPTS, last_err)
+    return False, last_err
 

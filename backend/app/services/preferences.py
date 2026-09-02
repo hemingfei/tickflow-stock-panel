@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -516,6 +517,164 @@ def set_review_push_channels(channels: list[str]) -> list[str]:
             cleaned.append(c)
     save({"review_push_channels": cleaned})
     return cleaned
+
+
+# 看板快照定时推送: 间隔分钟数范围 (1~120, 每 1~2 小时一次以内)
+WEBHOOK_PUSH_INTERVAL_RANGE = (1, 120)
+
+# 看板快照定时推送: 时间窗数量上限 (增删由前端控制, 至少 1 个)
+WEBHOOK_PUSH_MAX_WINDOWS = 6
+
+# 看板快照定时推送格式:
+#   generic = 原样 POST 快照 JSON (任意 http/s 下游)
+#   feishu  = 飞书自定义机器人 interactive 卡片 (看板摘要)
+#   kol     = 系统 KOL Webhook 简化格式 {"text","title","msg_id"} (+可选签名)
+WEBHOOK_PUSH_FORMATS = {"generic", "feishu", "kol"}
+
+
+def _normalize_push_windows(raw: object) -> list[dict]:
+    """把 windows 原始数据规整为 [{"start_time","end_time","interval_minutes"}]。
+
+    只保留起止齐全、格式合法的窗口 (fail-closed), 间隔裁剪到合法范围,
+    超出上限的窗口丢弃; 全部非法时回退默认单窗。
+    """
+    lo, hi = WEBHOOK_PUSH_INTERVAL_RANGE
+    windows: list[dict] = []
+    for w in raw if isinstance(raw, list) else []:
+        if not isinstance(w, dict):
+            continue
+        s = str(w.get("start_time") or "").strip()
+        e = str(w.get("end_time") or "").strip()
+        if not s or not e:
+            continue
+        try:
+            ts = datetime.strptime(s, "%H:%M").time()
+            te = datetime.strptime(e, "%H:%M").time()
+            interval = int(w.get("interval_minutes", 5))
+        except (TypeError, ValueError):
+            continue
+        windows.append({
+            "start_time": ts.strftime("%H:%M"),
+            "end_time": te.strftime("%H:%M"),
+            "interval_minutes": max(lo, min(hi, interval)),
+        })
+        if len(windows) >= WEBHOOK_PUSH_MAX_WINDOWS:
+            break
+    if not windows:
+        windows = [{"start_time": "09:30", "end_time": "11:30", "interval_minutes": 5}]
+    return windows
+
+
+def get_webhook_push_schedule() -> dict:
+    """看板快照定时推送配置。默认关闭。
+
+    windows 为时间窗列表 (北京时间 HH:MM, 闭区间), 每窗独立开始/结束/间隔:
+    {"enabled": False, "format": "generic", "webhook_url": "", "feishu_secret": "",
+     "windows": [{"start_time": "09:30", "end_time": "11:30", "interval_minutes": 5}]}
+    兼容旧版平铺字段 start_time/end_time/start_time_2/end_time_2 + 全局
+    interval_minutes: 缺 windows 时迁移读取, 两个旧窗都转成独立窗口。
+    """
+    d = load().get("webhook_push_schedule", {}) or {}
+    fmt = str(d.get("format", "generic") or "generic")
+    if isinstance(d.get("windows"), list):
+        windows = _normalize_push_windows(d.get("windows"))
+    else:
+        # 旧版平铺格式迁移: 两窗共用全局间隔
+        lo, hi = WEBHOOK_PUSH_INTERVAL_RANGE
+        try:
+            interval = max(lo, min(hi, int(d.get("interval_minutes", 5))))
+        except (TypeError, ValueError):
+            interval = 5
+        raw = [
+            {"start_time": d.get("start_time"), "end_time": d.get("end_time"),
+             "interval_minutes": interval},
+            {"start_time": d.get("start_time_2"), "end_time": d.get("end_time_2"),
+             "interval_minutes": interval},
+        ]
+        windows = _normalize_push_windows(raw)
+    return {
+        "enabled": bool(d.get("enabled", False)),
+        "format": fmt if fmt in WEBHOOK_PUSH_FORMATS else "generic",
+        "webhook_url": str(d.get("webhook_url", "") or ""),
+        "feishu_secret": str(d.get("feishu_secret", "") or ""),
+        "windows": windows,
+    }
+
+
+def set_webhook_push_schedule(
+    enabled: bool,
+    webhook_url: str,
+    windows: list,
+    format: str = "generic",
+    feishu_secret: str = "",
+) -> dict:
+    """保存看板快照定时推送配置。
+
+    windows 为时间窗列表, 每项 {"start_time","end_time","interval_minutes"}:
+    至少 1 个、至多 WEBHOOK_PUSH_MAX_WINDOWS 个, 每窗起止齐全且 开始 < 结束,
+    否则抛 ValueError (API 层转 400); 间隔裁剪到 WEBHOOK_PUSH_INTERVAL_RANGE。
+    format=feishu 时 webhook_url 必须为飞书自定义机器人地址 (启用时强校验);
+    format=kol 时为系统 KOL Webhook 地址 (https://<域名>/api/kol-webhook/<token>);
+    feishu_secret 为签名密钥 (飞书签名校验 / KOL Webhook 同一算法), 未配则留空。
+    保存即生效: 定时 job 每次 fire 重读本配置, 无需重启或重新注册。
+    """
+    from app.services.webhook_adapter import is_valid_feishu_url, is_valid_http_url
+
+    fmt = (format or "generic").strip()
+    if fmt not in WEBHOOK_PUSH_FORMATS:
+        raise ValueError("推送格式非法, 可选: generic / feishu / kol")
+    url = (webhook_url or "").strip()
+    secret = (feishu_secret or "").strip()
+    if enabled:
+        if not url:
+            raise ValueError("启用定时推送时必须配置 Webhook 地址")
+        if fmt == "feishu" and not is_valid_feishu_url(url):
+            raise ValueError(
+                "飞书格式需为飞书自定义机器人地址 "
+                "(https://open.feishu.cn/open-apis/bot/v2/hook/...)")
+        if fmt in ("generic", "kol") and not is_valid_http_url(url):
+            raise ValueError("Webhook 地址需以 http(s):// 开头")
+
+    if not isinstance(windows, list) or not windows:
+        raise ValueError("至少需要配置一个时间窗")
+    if len(windows) > WEBHOOK_PUSH_MAX_WINDOWS:
+        raise ValueError(f"时间窗最多 {WEBHOOK_PUSH_MAX_WINDOWS} 个")
+
+    lo, hi = WEBHOOK_PUSH_INTERVAL_RANGE
+    parsed: list[dict] = []
+    for i, w in enumerate(windows, 1):
+        item = w if isinstance(w, dict) else {}
+        label = f"时间窗{i}"
+        s = str(item.get("start_time") or "").strip()
+        e = str(item.get("end_time") or "").strip()
+        if not s or not e:
+            raise ValueError(f"{label}需同时填写开始与结束时间")
+        try:
+            ts = datetime.strptime(s, "%H:%M").time()
+            te = datetime.strptime(e, "%H:%M").time()
+        except ValueError as ex:
+            raise ValueError(f"{label}时间格式需为 HH:MM (北京时间)") from ex
+        if ts >= te:
+            raise ValueError(f"{label}开始时间需早于结束时间")
+        try:
+            interval = int(item.get("interval_minutes", 5))
+        except (TypeError, ValueError) as ex:
+            raise ValueError(f"{label}推送间隔需为 {lo}~{hi} 的整数分钟") from ex
+        parsed.append({
+            "start_time": ts.strftime("%H:%M"),
+            "end_time": te.strftime("%H:%M"),
+            "interval_minutes": max(lo, min(hi, interval)),
+        })
+
+    cfg = {
+        "enabled": bool(enabled),
+        "format": fmt,
+        "webhook_url": url,
+        "feishu_secret": secret,
+        "windows": parsed,
+    }
+    save({"webhook_push_schedule": cfg})
+    return cfg
 
 
 

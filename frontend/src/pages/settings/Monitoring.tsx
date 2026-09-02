@@ -8,7 +8,10 @@ import {
   Flame,
   Zap,
   Webhook,
+  Clock,
   ChevronDown,
+  Plus,
+  Trash2,
 } from 'lucide-react'
 import {
   usePreferences,
@@ -17,11 +20,14 @@ import {
   useCapabilities,
 } from '@/lib/useSharedQueries'
 import { useUpdateQuoteInterval, useToggleRealtimeQuotes } from '@/lib/useSharedMutations'
-import { api } from '@/lib/api'
+import { api, type WebhookPushWindow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { tierRank } from '@/lib/capability-labels'
 import { toast } from '@/components/Toast'
 import { DepthConfigContent } from '@/components/data/DepthConfigCard'
+
+// 与后端 preferences.WEBHOOK_PUSH_MAX_WINDOWS 一致
+const MAX_PUSH_WINDOWS = 6
 
 // 页面 → 显示名
 const PAGE_LABELS: Record<string, string> = {
@@ -96,6 +102,34 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [wecomOpen, setWecomOpen] = useState(false)
   // 智能机器人配置区展开态
   const [botOpen, setBotOpen] = useState(false)
+  // 看板快照定时推送: 时间窗列表 (可增删, 至少 1 个, 每窗独立间隔) + 格式/地址,
+  // 按格式 (通用 JSON / 飞书卡片 / KOL) 推给用户 Webhook
+  const pushSched = prefs?.webhook_push_schedule
+  const [pushEnabledDraft, setPushEnabledDraft] = useState(false)
+  const [pushFormatDraft, setPushFormatDraft] = useState<'generic' | 'feishu' | 'kol'>('generic')
+  const [pushUrlDraft, setPushUrlDraft] = useState('')
+  const [pushSecretDraft, setPushSecretDraft] = useState('')
+  const [pushWindowsDraft, setPushWindowsDraft] = useState<WebhookPushWindow[]>([
+    { start_time: '09:30', end_time: '11:30', interval_minutes: 5 },
+  ])
+  const [pushError, setPushError] = useState('')
+  useEffect(() => {
+    setPushEnabledDraft(pushSched?.enabled ?? false)
+    setPushFormatDraft(pushSched?.format ?? 'generic')
+    setPushUrlDraft(pushSched?.webhook_url ?? '')
+    setPushSecretDraft(pushSched?.feishu_secret ?? '')
+    const windows = pushSched?.windows
+    setPushWindowsDraft(
+      windows && windows.length > 0
+        ? windows.map(w => ({ ...w }))
+        : [{ start_time: '09:30', end_time: '11:30', interval_minutes: 5 }],
+    )
+  }, [pushSched])
+  const pushStatus = useQuery({
+    queryKey: QK.webhookPushStatus,
+    queryFn: () => api.webhookPushStatus(),
+    refetchInterval: pushSched?.enabled ? 30_000 : false,
+  })
   useEffect(() => {
     setFeishuDraft(feishuWebhookUrl)
     setFeishuSecretDraft(feishuWebhookSecret)
@@ -217,6 +251,90 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const submitBot = useCallback(() => {
     saveWecomBot.mutate({ botId: botIdDraft.trim(), secret: botSecretDraft.trim() })
   }, [botIdDraft, botSecretDraft, saveWecomBot])
+
+  // ===== 看板快照定时推送 =====
+  const savePushSchedule = useMutation({
+    mutationFn: (cfg: { enabled: boolean; format: string; webhook_url: string; feishu_secret: string; windows: WebhookPushWindow[] }) =>
+      api.updateWebhookPushSchedule(cfg),
+    onSuccess: () => {
+      setPushError('')
+      toast('定时推送配置已保存', 'success')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (err: any) => setPushError(String(err?.message ?? '保存失败')),
+  })
+  const updatePushWindow = (idx: number, patch: Partial<WebhookPushWindow>) => {
+    setPushWindowsDraft(ws => ws.map((w, i) => (i === idx ? { ...w, ...patch } : w)))
+  }
+  const addPushWindow = () => {
+    setPushWindowsDraft(ws =>
+      ws.length >= MAX_PUSH_WINDOWS ? ws : [...ws, { start_time: '13:00', end_time: '15:00', interval_minutes: 5 }],
+    )
+  }
+  // 至少保留一个时间窗 (与后端校验一致), 删到最后一个时按钮置灰
+  const removePushWindow = (idx: number) => {
+    setPushWindowsDraft(ws => (ws.length <= 1 ? ws : ws.filter((_, i) => i !== idx)))
+  }
+  const submitPushSchedule = useCallback(() => {
+    const url = pushUrlDraft.trim()
+    if (pushEnabledDraft && !/^https?:\/\//.test(url)) {
+      setPushError('启用前请填写 http(s):// 开头的 Webhook 地址')
+      return
+    }
+    if (pushFormatDraft === 'feishu' && url && !url.startsWith(FEISHU_PREFIX)) {
+      setPushError('飞书格式需为飞书自定义机器人地址 (' + FEISHU_PREFIX + '...)')
+      return
+    }
+    const windows: WebhookPushWindow[] = []
+    for (let i = 0; i < pushWindowsDraft.length; i++) {
+      const w = pushWindowsDraft[i]
+      const start = (w.start_time || '').trim()
+      const end = (w.end_time || '').trim()
+      if (!start || !end) {
+        setPushError(`时间窗${i + 1}需同时填写开始与结束时间`)
+        return
+      }
+      if (start >= end) {
+        setPushError(`时间窗${i + 1}开始需早于结束时间 (北京时间)`)
+        return
+      }
+      const interval = Math.round(Number(w.interval_minutes))
+      if (!Number.isFinite(interval) || interval < 1 || interval > 120) {
+        setPushError(`时间窗${i + 1}间隔需为 1~120 的整数分钟`)
+        return
+      }
+      windows.push({ start_time: start, end_time: end, interval_minutes: interval })
+    }
+    savePushSchedule.mutate({
+      enabled: pushEnabledDraft,
+      format: pushFormatDraft,
+      webhook_url: url,
+      feishu_secret: pushSecretDraft.trim(),
+      windows,
+    })
+  }, [pushUrlDraft, pushWindowsDraft, pushEnabledDraft, pushFormatDraft, pushSecretDraft, savePushSchedule])
+  const testPush = useMutation({
+    mutationFn: (draft: { webhook_url: string; format: string; feishu_secret: string }) =>
+      api.testWebhookPush(draft),
+    onSuccess: (res) => {
+      toast(res.ok ? `测试推送成功 (${res.detail})` : `测试推送失败: ${res.detail}`, res.ok ? 'success' : 'error')
+      qc.invalidateQueries({ queryKey: QK.webhookPushStatus })
+    },
+    onError: (err: any) => toast(String(err?.message ?? '测试推送失败'), 'error'),
+  })
+  // 测试推送按当前表单草稿发送 (无需先保存), 与保存后的实际推送行为一致
+  const submitTestPush = useCallback(() => {
+    const url = pushUrlDraft.trim()
+    if (!/^https?:\/\//.test(url)) {
+      setPushError('请先填写 http(s):// 开头的 Webhook 地址')
+      return
+    }
+    if (pushFormatDraft === 'feishu' && !url.startsWith(FEISHU_PREFIX)) {
+      setPushError('飞书格式需为飞书自定义机器人地址 (' + FEISHU_PREFIX + '...)')
+      return
+    }
+    testPush.mutate({ webhook_url: url, format: pushFormatDraft, feishu_secret: pushSecretDraft.trim() })
+  }, [pushUrlDraft, pushFormatDraft, pushSecretDraft, testPush])
 
   // 智能机器人长连接开关(不改动凭证): 开启→连接, 关闭→断开
   const toggleBotConnection = useMutation({
@@ -787,6 +905,168 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
               )}
             </div>
 
+          </div>
+        </Card>
+
+        {/* 看板快照定时推送 — 窗口内按间隔把看板完整结构化 JSON POST 到用户 Webhook */}
+        <Card icon={Clock} title="看板快照定时推送" badge={pushSched?.enabled ? '已启用' : undefined}>
+          <p className="text-xs text-secondary mb-3">
+            在多个时间窗内按各自间隔推送「市场看板」快照: <b className="text-foreground/80">飞书机器人</b>发 interactive 卡片;
+            <b className="text-foreground/80"> KOL Webhook</b> 发简化格式 (&#123;"text","title","msg_id"&#125;, 兼容 vpush 系统大V接入, 支持签名);
+            <b className="text-foreground/80"> 通用 JSON</b> 原样 POST 完整快照 (供程序复现看板)。
+            仅周一至周五触发, 触发时刻为 各窗口开始时间 + N×间隔 (北京时间, N≥1 —— 开始时刻只作为计时起点, 本身不推送);
+            时间窗可增删, 至少保留 1 个。
+            「测试推送」按当前表单内容发送, 无需先保存。
+          </p>
+
+          <ToggleRow
+            label="启用定时推送"
+            desc="保存后即生效, 无需重启; 关闭保存后停止推送"
+            checked={pushEnabledDraft}
+            onChange={setPushEnabledDraft}
+          />
+
+          <div className="mt-1 space-y-2">
+            <label className="block space-y-1.5">
+              <span className="text-[11px] text-muted">
+                Webhook 地址 {pushFormatDraft === 'feishu'
+                  ? '(飞书自定义机器人地址)'
+                  : pushFormatDraft === 'kol'
+                    ? '(KOL Webhook 地址, 即凭据请妥善保管)'
+                    : '(任意 http/s 地址, 原样 POST JSON)'}
+              </span>
+              <input
+                value={pushUrlDraft}
+                onChange={e => setPushUrlDraft(e.target.value)}
+                placeholder={pushFormatDraft === 'feishu'
+                  ? FEISHU_PREFIX + 'xxxxxxxx'
+                  : pushFormatDraft === 'kol'
+                    ? 'https://<域名>/api/kol-webhook/<token>'
+                    : 'https://example.com/hook'}
+                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+              />
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block space-y-1.5">
+                <span className="text-[11px] text-muted">推送格式</span>
+                <select
+                  value={pushFormatDraft}
+                  onChange={e => setPushFormatDraft(e.target.value as 'generic' | 'feishu' | 'kol')}
+                  className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:border-accent/50"
+                >
+                  <option value="generic">通用 JSON (原样 POST 快照)</option>
+                  <option value="feishu">飞书机器人 (卡片摘要)</option>
+                  <option value="kol">KOL Webhook (简化格式)</option>
+                </select>
+              </label>
+              {pushFormatDraft !== 'generic' && (
+                <label className="block space-y-1.5">
+                  <span className="text-[11px] text-muted">签名密钥 (可选 · 飞书/KOL 签名校验)</span>
+                  <input
+                    type="password"
+                    value={pushSecretDraft}
+                    onChange={e => setPushSecretDraft(e.target.value)}
+                    placeholder="接收端未启用签名校验则留空"
+                    className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                  />
+                </label>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              {pushWindowsDraft.map((w, i) => (
+                <div key={i} className="rounded-btn border border-border p-2">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] text-muted">时间窗 {i + 1}</span>
+                    <button
+                      onClick={() => removePushWindow(i)}
+                      disabled={pushWindowsDraft.length <= 1}
+                      title={pushWindowsDraft.length <= 1 ? '至少保留一个时间窗' : '删除此时间窗'}
+                      className="p-1 rounded text-muted hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-muted disabled:hover:bg-transparent"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="block space-y-1.5">
+                      <span className="text-[11px] text-muted">开始</span>
+                      <input
+                        type="time"
+                        value={w.start_time}
+                        onChange={e => updatePushWindow(i, { start_time: e.target.value })}
+                        className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:border-accent/50"
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-[11px] text-muted">结束</span>
+                      <input
+                        type="time"
+                        value={w.end_time}
+                        onChange={e => updatePushWindow(i, { end_time: e.target.value })}
+                        className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:border-accent/50"
+                      />
+                    </label>
+                    <label className="block space-y-1.5">
+                      <span className="text-[11px] text-muted">间隔 (分钟)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={w.interval_minutes}
+                        onChange={e => updatePushWindow(i, { interval_minutes: Number(e.target.value) })}
+                        className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:border-accent/50"
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+              <button
+                onClick={addPushWindow}
+                disabled={pushWindowsDraft.length >= MAX_PUSH_WINDOWS}
+                className="flex items-center gap-1 px-2 py-1.5 rounded-btn border border-dashed border-border text-[11px] text-secondary cursor-pointer hover:bg-base/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Plus size={12} />
+                添加时间窗{pushWindowsDraft.length >= MAX_PUSH_WINDOWS ? ` (最多 ${MAX_PUSH_WINDOWS} 个)` : ''}
+              </button>
+            </div>
+
+            {pushError && (
+              <div className="text-[11px] text-danger">{pushError}</div>
+            )}
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={submitPushSchedule}
+                disabled={savePushSchedule.isPending}
+                className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+              >
+                {savePushSchedule.isPending ? '保存中…' : '保存'}
+              </button>
+              <button
+                onClick={submitTestPush}
+                disabled={testPush.isPending}
+                className="px-3 py-1.5 rounded-btn border border-border text-xs text-secondary cursor-pointer hover:bg-base/60 transition-colors disabled:opacity-50"
+              >
+                {testPush.isPending ? '推送中…' : '测试推送'}
+              </button>
+              {(() => {
+                const ps = pushStatus.data
+                if (!ps?.last_attempt_at) return <span className="text-[10px] text-muted">尚未推送</span>
+                const hhmm = ps.last_attempt_at.slice(11, 16)
+                const fmtTag = ps.last_format === 'kol' ? 'KOL' : ps.last_format === 'feishu' ? '飞书' : ps.last_format === 'generic' ? 'JSON' : ''
+                return (
+                  <span className={`text-[10px] ${ps.last_ok ? 'text-emerald-500' : 'text-danger'}`}>
+                    {fmtTag && `[${fmtTag}] `}{ps.last_ok ? '●' : '✕'} 上次 {hhmm} {ps.last_ok ? '成功' : `失败 · ${ps.last_detail}`}
+                  </span>
+                )
+              })()}
+            </div>
+
+            <p className="text-[10px] text-muted leading-relaxed">
+              快照内容: 指数/涨跌分布/涨停梯队/情绪雷达/榜单/概念行业热度 + 监控中心最近告警 +
+              数据概况。也可手动调用 GET /api/overview/board-snapshot 获取同一份 JSON。
+            </p>
           </div>
         </Card>
       </div>

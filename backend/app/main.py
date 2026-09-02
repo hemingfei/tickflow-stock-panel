@@ -101,6 +101,21 @@ async def lifespan(app: FastAPI):
         logger.warning("scheduler not started: %s", e)
         app.state.scheduler = None
 
+    # 看板快照定时推送: job 每分钟自检偏好, 仅在「启用 + 工作日 + 窗口内 + 对齐间隔」
+    # 时构建看板快照并 POST 到用户配置的 Webhook。快照构建器走依赖注入, 避免服务层
+    # 反向依赖 API 层; 调度器启动失败时推送不可用, 只记警告不阻断启动。
+    try:
+        from app.api.overview import build_board_snapshot
+        from app.services import board_webhook_push
+        board_webhook_push.set_snapshot_builder(build_board_snapshot)
+        if app.state.scheduler:
+            board_webhook_push.register_push_job(app.state.scheduler, app.state)
+            logger.info("board webhook push job registered")
+        else:
+            logger.warning("board webhook push disabled: scheduler unavailable")
+    except Exception as e:  # 推送不可用不影响主流程
+        logger.warning("board webhook push init failed: %s", e)
+
     # depth sealed: 启动补跑(当天文件不存在) + 盘中轮询(有能力时)
     try:
         depth_service.boot_check()

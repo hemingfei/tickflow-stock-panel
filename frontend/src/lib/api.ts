@@ -374,6 +374,12 @@ export interface OverviewDimensionRankItem {
     name?: string | null
     change_pct?: number | null
   } | null
+  /** 板块内涨幅前三的龙头股 (change_pct 为小数制) */
+  leaders?: {
+    symbol?: string | null
+    name?: string | null
+    change_pct?: number | null
+  }[] | null
 }
 
 export interface OverviewMarket {
@@ -1107,6 +1113,7 @@ export interface Preferences {
   depth_finalize_time: { hour: number; minute: number }
   review_schedule: { enabled: boolean; hour: number; minute: number }
   review_push_channels: string[]
+  webhook_push_schedule?: WebhookPushSchedule
   sse_refresh_pages: Record<string, boolean>
   strategy_monitor_enabled: boolean
   strategy_monitor_ids: string[]
@@ -1137,6 +1144,39 @@ export interface MonitorExtFieldItem {
   /** 隐藏的位置 (0-based), 如 [0] 表示隐藏第一个 */
   hiddenIndices?: number[]
 }
+
+/** 单个推送时间窗 (北京时间 HH:MM 闭区间) + 该窗独立的推送间隔分钟 */
+export interface WebhookPushWindow {
+  start_time: string
+  end_time: string
+  /** 间隔分钟数 (1~120), 触发时刻为 开始时间 + N×间隔 (N>=1, 开始本身不触发) */
+  interval_minutes: number
+}
+
+/** 看板快照定时推送配置 (时间窗列表, 至少 1 个) */
+export interface WebhookPushSchedule {
+  enabled: boolean
+  /** generic=原样 POST 快照 JSON; feishu=飞书机器人卡片; kol=系统 KOL Webhook 简化格式 */
+  format: 'generic' | 'feishu' | 'kol'
+  webhook_url: string
+  /** 签名密钥 (飞书签名校验 / KOL Webhook 同一算法), 未配则空 */
+  feishu_secret: string
+  /** 时间窗列表, 数量可增删 (至少 1 个), 每窗独立 开始/结束/间隔 */
+  windows: WebhookPushWindow[]
+}
+
+/** 看板定时推送最近执行状态 (后端内存态, 重启清零) */
+export interface WebhookPushStatus {
+  last_attempt_at: string | null
+  last_success_at: string | null
+  last_ok: boolean | null
+  last_detail: string
+  last_as_of: string | null
+  /** 实际使用的推送格式 (generic/feishu/kol), 用于排查格式与接收端不匹配 */
+  last_format: string | null
+  recent: { time: string; ok: boolean; detail: string; as_of: string | null; duration_ms: number; format?: string | null }[]
+}
+
 export interface StrategyAlertEvent {
   source: 'strategy' | 'depth'
   type: string
@@ -1362,6 +1402,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url }),
     }),
+  updateWebhookPushSchedule: (cfg: { enabled: boolean; format: string; webhook_url: string; feishu_secret: string; windows: WebhookPushWindow[] }) =>
+    request<{ webhook_push_schedule: WebhookPushSchedule }>('/api/settings/preferences/webhook-push-schedule', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
+    }),
+  testWebhookPush: (payload?: { webhook_url?: string; format?: string; feishu_secret?: string }) =>
+    request<{ ok: boolean; detail: string; as_of: string | null; snapshot_bytes: number; duration_ms: number }>('/api/settings/webhook-push-test', {
+      method: 'POST',
+      body: JSON.stringify(payload ?? {}),
+    }),
+  webhookPushStatus: () => request<WebhookPushStatus>('/api/settings/webhook-push-status'),
   updateWecomBot: (botId: string, secret: string, enabled: boolean = true) =>
     request<{
       wecom_bot_id: string

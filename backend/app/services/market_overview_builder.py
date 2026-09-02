@@ -286,6 +286,11 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
         if not changes:
             continue
         leader = max(stocks, key=lambda s: _finite(s.get("change_pct")) or -999)
+        ranked = sorted(
+            (s for s in stocks if _finite(s.get("change_pct")) is not None),
+            key=lambda s: _finite(s.get("change_pct")) or -999,
+            reverse=True,
+        )
         items.append({
             "name": name,
             "count": len(stocks),
@@ -298,6 +303,12 @@ def _dimension_rank(rows: list[dict], repo, kind: str, limit: int = 5, level: in
                 "name": leader.get("name"),
                 "change_pct": _finite(leader.get("change_pct")),
             },
+            # 板块内涨幅前三的龙头股 (小数制涨跌幅); leader 字段保留, 兼容看板页
+            "leaders": [
+                {"symbol": s.get("symbol"), "name": s.get("name"),
+                 "change_pct": _finite(s.get("change_pct"))}
+                for s in ranked[:3]
+            ],
         })
 
     leading = sorted(items, key=lambda x: x["avg_pct"], reverse=True)[:limit]

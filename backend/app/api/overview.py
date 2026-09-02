@@ -5,7 +5,7 @@ import math
 import re
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 import polars as pl
@@ -347,7 +347,7 @@ def _pct_band_rows(values: list[float]) -> list[dict]:
     return out
 
 
-def _build_overview(request: Request, as_of: date | None = None) -> dict:
+def _build_overview(app_state, as_of: date | None = None) -> dict:
     """装配市场总览(委托给 services.market_overview_builder,保持行为一致)。
 
     逻辑已抽离至 build_market_overview,以解耦对 Request 的依赖,
@@ -355,16 +355,19 @@ def _build_overview(request: Request, as_of: date | None = None) -> dict:
     """
     from app.services.market_overview_builder import build_market_overview
     return build_market_overview(
-        repo=request.app.state.repo,
-        quote_service=getattr(request.app.state, "quote_service", None),
-        depth_service=getattr(request.app.state, "depth_service", None),
+        repo=app_state.repo,
+        quote_service=getattr(app_state, "quote_service", None),
+        depth_service=getattr(app_state, "depth_service", None),
         as_of=as_of,
     )
 
 
-@router.get("/market")
-def market_overview(request: Request, as_of: date | None = None):
-    """总览页单次请求聚合数据，避免前端拉全市场明细后再计算。"""
+def market_overview_cached(app_state, as_of: date | None = None) -> dict:
+    """带 5s TTL 缓存的市场总览装配。
+
+    /market 端点与看板快照 (build_board_snapshot / 定时推送) 共用同一份缓存,
+    避免同一窗口内重复全市场聚合。
+    """
     global _cache, _cache_key, _cache_ts
     now = time.time()
     cache_key = as_of.isoformat() if as_of else "latest"
@@ -373,9 +376,102 @@ def market_overview(request: Request, as_of: date | None = None):
         if _cache is not None and _cache_key == cache_key and (now - _cache_ts) < _CACHE_TTL:
             return _cache
     # 装配在锁外进行 (耗时), 允许并发未命中时各自构建, 不长时间持锁串行化请求
-    data = _build_overview(request, as_of)
+    data = _build_overview(app_state, as_of)
     with _cache_lock:
         _cache = data
         _cache_key = cache_key
         _cache_ts = now
     return data
+
+
+@router.get("/market")
+def market_overview(request: Request, as_of: date | None = None):
+    """总览页单次请求聚合数据，避免前端拉全市场明细后再计算。"""
+    return market_overview_cached(request.app.state, as_of)
+
+
+# ================================================================
+# 看板结构化快照: 单个 JSON 覆盖「市场看板」页面全部信息
+# ================================================================
+
+SNAPSHOT_SCHEMA_VERSION = 2
+
+# 实时行情数据年龄超过该阈值时, 即使服务在运行也按收盘数据处理 (防陈旧数据冒充实时)
+_SNAPSHOT_REALTIME_MAX_AGE_MS = 10 * 60_000
+
+
+def _snapshot_data_time(overview: dict) -> dict:
+    """快照数据时点: 盘中取实时行情最近一次拉取时间, 其余 (盘后/午休/非实时) 标为交易日收盘。
+
+    判据: quote_service 运行中 + 交易时段内 + last_fetch_ms 距今小于阈值 → 实时;
+    否则回退 "{as_of} 收盘" (as_of 为快照实际使用的交易日)。
+    """
+    qs = overview.get("quote_status") if isinstance(overview.get("quote_status"), dict) else {}
+    as_of = overview.get("as_of") or "—"
+    last_fetch_ms = qs.get("last_fetch_ms")
+    fresh = (
+        isinstance(last_fetch_ms, (int, float)) and last_fetch_ms > 0
+        and (time.time() * 1000 - last_fetch_ms) < _SNAPSHOT_REALTIME_MAX_AGE_MS
+    )
+    if qs.get("running") and qs.get("is_trading_hours") and fresh:
+        try:
+            from app.market_time import CN_TZ
+            t = datetime.fromtimestamp(last_fetch_ms / 1000, CN_TZ).strftime("%H:%M")
+            return {"realtime": True, "text": f"实时 {t}"}
+        except (OSError, OverflowError, ValueError):
+            pass
+    return {"realtime": False, "text": f"{as_of} 收盘"}
+
+
+def build_board_snapshot(app_state, as_of: date | None = None) -> dict:
+    """把「市场看板」页面渲染所需的全部数据聚合为单个结构化 JSON。
+
+    组成与 Dashboard.tsx 的数据来源一一对应 (五个查询全部内聚):
+      - overview:     /api/overview/market 全量聚合 (看板主体所有区块), 复用同一缓存;
+      - alerts:       监控中心小组件 (前端调 GET /api/alerts?days=7&limit=10);
+      - data_status:  页头的日期范围与「无数据」判断 (enriched/daily 两表概况);
+      - capabilities: 档位与能力门控 (页面据此判断 depth5.batch 是否可用 → 封板徽标降级口径),
+                      与 GET /api/capabilities 同源;
+      - settings:     mode (无 key 提示) 与 onboarding_completed (首次引导弹窗)。
+    下游拿到即可复现看板; 字段结构遵循各子来源的既有契约 (概览字段见
+    services/market_overview_builder.py, 告警字段见 services/alert_store.py)。
+    注意: 页面上的交互式下钻 (完整连板梯队页、个股弹窗、图表历史序列) 由前端
+    点击时按需请求, 不属于看板首屏渲染数据, 不在本快照内。
+    """
+    from app.api.data import _get_table_stats, _safe_aggregate_daily, _safe_aggregate_enriched
+    from app.market_time import cn_now
+    from app.services import alert_store
+    from app.services import preferences as user_prefs
+    from app.tickflow import client as tf_client
+    from app.tickflow.policy import detect_capabilities, tier_label
+
+    overview = market_overview_cached(app_state, as_of)
+    data_dir = app_state.repo.store.data_dir
+    # 与 main.py 启动时一致: 优先用运行时热更新的 capset, 缺失时再探测
+    capset = getattr(app_state, "capabilities", None) or detect_capabilities()
+    return {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "generated_at": cn_now().isoformat(timespec="seconds"),
+        "as_of": overview.get("as_of"),
+        "data_time": _snapshot_data_time(overview),
+        "overview": overview,
+        "alerts": {
+            "alerts": alert_store.list_recent(data_dir, days=7, limit=10),
+            "total": alert_store.count(data_dir),
+        },
+        "data_status": {
+            "enriched": _get_table_stats("enriched", lambda: _safe_aggregate_enriched(app_state.repo)),
+            "daily": _get_table_stats("daily", lambda: _safe_aggregate_daily(app_state.repo)),
+        },
+        "capabilities": {"label": tier_label(), "capabilities": capset.to_dict()},
+        "settings": {
+            "mode": tf_client.current_mode(),
+            "onboarding_completed": user_prefs.get_onboarding_completed(),
+        },
+    }
+
+
+@router.get("/board-snapshot")
+def board_snapshot(request: Request, as_of: date | None = None):
+    """看板结构化快照: 前端/自动化可凭此单个 JSON 复现看板页面。"""
+    return build_board_snapshot(request.app.state, as_of)
