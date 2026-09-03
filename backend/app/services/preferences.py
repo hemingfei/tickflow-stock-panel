@@ -615,9 +615,9 @@ def set_depth_finalize_time(hour: int, minute: int) -> dict:
     return {"hour": h, "minute": m}
 
 
-# 复盘推送可选渠道白名单 (企业微信已实现, 与飞书并列)
-# 多选: 不推送 = 空数组, 而非 'none'
-REVIEW_PUSH_CHANNELS = {"feishu", "wecom"}
+# 推送可选渠道白名单: 飞书 / 企业微信 / 系统 KOL Webhook (vpush 简化格式)
+# 多选: 不推送 = 空数组, 而非 'none'。监控规则默认渠道与复盘推送渠道共用本白名单。
+REVIEW_PUSH_CHANNELS = {"feishu", "wecom", "kol"}
 
 
 def get_review_schedule() -> dict:
@@ -688,7 +688,8 @@ def get_review_push_channels() -> list[str]:
     """复盘推送渠道(多选) — 选定的外部工具列表, 复盘归档后逐个推送。
 
     与 review_schedule / 实时行情完全独立, 常驻可单独设置。
-    空列表 = 不推送; ['feishu'] = 推送到飞书(复用监控中心全局 feishu_webhook_url/secret)。
+    空列表 = 不推送; ['feishu'] = 推送到飞书(复用推送通知的全局飞书 Webhook 配置),
+    'kol' = 推送到系统 KOL Webhook(复用全局 kol_webhook_url/secret)。
 
     向后兼容:
       - 老多版本单选 review_push_channel=='feishu' → ['feishu']
@@ -725,11 +726,13 @@ WEBHOOK_PUSH_INTERVAL_RANGE = (1, 120)
 # 看板快照定时推送: 时间窗数量上限 (增删由前端控制, 至少 1 个)
 WEBHOOK_PUSH_MAX_WINDOWS = 6
 
-# 看板快照定时推送格式:
-#   generic = 原样 POST 快照 JSON (任意 http/s 下游)
-#   feishu  = 飞书自定义机器人 interactive 卡片 (看板摘要)
-#   kol     = 系统 KOL Webhook 简化格式 {"text","title","msg_id"} (+可选签名)
-WEBHOOK_PUSH_FORMATS = {"generic", "feishu", "kol"}
+# 看板快照定时推送平台 (多选), 地址复用「推送通知」的全局渠道配置:
+#   feishu = 飞书自定义机器人 interactive 卡片 (看板摘要)
+#   wecom  = 企业微信群推送 Webhook markdown 摘要
+#   kol    = 系统 KOL Webhook 简化格式 {"text","title","msg_id"} (+可选签名)
+# 旧版 format=generic (原样 POST 任意地址) 不再作为调度配置, 仅保留在
+# 测试端点显式传 webhook_url 的路径 (push_now 的 generic 分支)。
+WEBHOOK_PUSH_CHANNELS = {"feishu", "wecom", "kol"}
 
 
 def _normalize_push_windows(raw: object) -> list[dict]:
@@ -768,14 +771,22 @@ def _normalize_push_windows(raw: object) -> list[dict]:
 def get_webhook_push_schedule() -> dict:
     """看板快照定时推送配置。默认关闭。
 
-    windows 为时间窗列表 (北京时间 HH:MM, 闭区间), 每窗独立开始/结束/间隔:
-    {"enabled": False, "format": "generic", "webhook_url": "", "feishu_secret": "",
-     "windows": [{"start_time": "09:30", "end_time": "11:30", "interval_minutes": 5}]}
-    兼容旧版平铺字段 start_time/end_time/start_time_2/end_time_2 + 全局
-    interval_minutes: 缺 windows 时迁移读取, 两个旧窗都转成独立窗口。
+    {"enabled": False, "channels": [], "windows": [...]}
+    channels 为推送平台多选 (feishu/wecom/kol), 发送地址复用「推送通知」的
+    全局渠道配置 (feishu_webhook_url / wecom_webhook_url / kol_webhook_url)。
+    兼容旧版:
+      - 缺 channels 时按旧 format 单选迁移: feishu→['feishu'], kol→['kol'];
+        旧 generic (原样 POST 任意地址) 无中心地址可复用, 迁移为空列表 (需重新勾选)。
+      - 旧版平铺字段 start_time/end_time/... + 全局 interval_minutes: 缺 windows
+        时迁移读取, 两个旧窗都转成独立窗口。
     """
     d = load().get("webhook_push_schedule", {}) or {}
-    fmt = str(d.get("format", "generic") or "generic")
+    raw_channels = d.get("channels")
+    if isinstance(raw_channels, list):
+        channels = [c for c in raw_channels if c in WEBHOOK_PUSH_CHANNELS]
+    else:
+        legacy_fmt = str(d.get("format") or "")
+        channels = {"feishu": ["feishu"], "kol": ["kol"]}.get(legacy_fmt, [])
     if isinstance(d.get("windows"), list):
         windows = _normalize_push_windows(d.get("windows"))
     else:
@@ -794,46 +805,32 @@ def get_webhook_push_schedule() -> dict:
         windows = _normalize_push_windows(raw)
     return {
         "enabled": bool(d.get("enabled", False)),
-        "format": fmt if fmt in WEBHOOK_PUSH_FORMATS else "generic",
-        "webhook_url": str(d.get("webhook_url", "") or ""),
-        "feishu_secret": str(d.get("feishu_secret", "") or ""),
+        "channels": channels,
         "windows": windows,
     }
 
 
 def set_webhook_push_schedule(
     enabled: bool,
-    webhook_url: str,
+    channels: list,
     windows: list,
-    format: str = "generic",
-    feishu_secret: str = "",
 ) -> dict:
     """保存看板快照定时推送配置。
 
+    channels 为推送平台多选 (feishu/wecom/kol), 白名单外的值过滤、保序、去重;
+    发送地址复用「推送通知」的全局渠道配置, 此处不再存地址/密钥。
     windows 为时间窗列表, 每项 {"start_time","end_time","interval_minutes"}:
     至少 1 个、至多 WEBHOOK_PUSH_MAX_WINDOWS 个, 每窗起止齐全且 开始 < 结束,
     否则抛 ValueError (API 层转 400); 间隔裁剪到 WEBHOOK_PUSH_INTERVAL_RANGE。
-    format=feishu 时 webhook_url 必须为飞书自定义机器人地址 (启用时强校验);
-    format=kol 时为系统 KOL Webhook 地址 (https://<域名>/api/kol-webhook/<token>);
-    feishu_secret 为签名密钥 (飞书签名校验 / KOL Webhook 同一算法), 未配则留空。
+    启用时至少选择 1 个平台, 否则抛 ValueError。
     保存即生效: 定时 job 每次 fire 重读本配置, 无需重启或重新注册。
     """
-    from app.services.webhook_adapter import is_valid_feishu_url, is_valid_http_url
-
-    fmt = (format or "generic").strip()
-    if fmt not in WEBHOOK_PUSH_FORMATS:
-        raise ValueError("推送格式非法, 可选: generic / feishu / kol")
-    url = (webhook_url or "").strip()
-    secret = (feishu_secret or "").strip()
-    if enabled:
-        if not url:
-            raise ValueError("启用定时推送时必须配置 Webhook 地址")
-        if fmt == "feishu" and not is_valid_feishu_url(url):
-            raise ValueError(
-                "飞书格式需为飞书自定义机器人地址 "
-                "(https://open.feishu.cn/open-apis/bot/v2/hook/...)")
-        if fmt in ("generic", "kol") and not is_valid_http_url(url):
-            raise ValueError("Webhook 地址需以 http(s):// 开头")
+    cleaned: list[str] = []
+    for c in channels or []:
+        if c in WEBHOOK_PUSH_CHANNELS and c not in cleaned:
+            cleaned.append(c)
+    if enabled and not cleaned:
+        raise ValueError("启用定时推送时至少选择一个推送平台")
 
     if not isinstance(windows, list) or not windows:
         raise ValueError("至少需要配置一个时间窗")
@@ -868,9 +865,7 @@ def set_webhook_push_schedule(
 
     cfg = {
         "enabled": bool(enabled),
-        "format": fmt,
-        "webhook_url": url,
-        "feishu_secret": secret,
+        "channels": cleaned,
         "windows": parsed,
     }
     save({"webhook_push_schedule": cfg})
@@ -988,6 +983,34 @@ def set_wecom_webhook_url(url: str) -> str:
     from app.services.webhook_adapter import normalize_wecom_url
     save({"wecom_webhook_url": normalize_wecom_url(url)})
     return get_wecom_webhook_url()
+
+
+# ===== 系统 KOL Webhook (vpush 简化格式, 与飞书/企业微信并列的推送渠道) =====
+
+
+def get_kol_webhook_url() -> str:
+    """系统 KOL Webhook 地址 (https://<域名>/api/kol-webhook/<token>)。
+
+    地址本身即凭据, 仅存于服务端配置, 不进日志。
+    """
+    return load().get("kol_webhook_url", "")
+
+
+def get_kol_webhook_secret() -> str:
+    """KOL Webhook 签名密钥 — 接收端启用签名校验时必填, 算法与飞书一致, 留空表示不验签。"""
+    return load().get("kol_webhook_secret", "")
+
+
+def set_kol_webhook_url(url: str) -> str:
+    """保存 KOL Webhook 地址。传入空串表示清空配置。"""
+    save({"kol_webhook_url": str(url or "").strip()})
+    return get_kol_webhook_url()
+
+
+def set_kol_webhook_secret(secret: str) -> str:
+    """保存 KOL Webhook 签名密钥。传入空串表示不验签。"""
+    save({"kol_webhook_secret": str(secret or "").strip()})
+    return get_kol_webhook_secret()
 
 
 # ===== 企业微信智能机器人 (API 模式 / 长连接) =====

@@ -16,6 +16,7 @@ from app.api.settings import (
 
 FEISHU_URL = "https://open.feishu.cn/open-apis/bot/v2/hook/test"
 WECOM_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test-key"
+KOL_URL = "https://vpush.example.com/api/kol-webhook/test-token"
 
 
 def test_feishu_sends_saved_url_and_secret(monkeypatch):
@@ -87,6 +88,46 @@ def test_wecom_sends_saved_url(monkeypatch):
     assert calls["url"] == WECOM_URL
     assert calls["title"] == "TickFlow Stock Panel 推送测试"
     assert "推送配置正确" in calls["body"]
+
+
+def test_kol_sends_saved_url_and_secret(monkeypatch):
+    """KOL 渠道测试: 简化格式发送, 密钥参与签名, msg_id 每次测试独立 (不被下游去重)。"""
+    calls = {}
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_url", lambda: KOL_URL)
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_secret", lambda: "kol-secret")
+    monkeypatch.setattr(
+        "app.services.webhook_adapter.send_kol",
+        lambda url, title, body, secret="", msg_id=None: calls.update(
+            url=url, title=title, body=body, secret=secret, msg_id=msg_id,
+        ) or True,
+    )
+
+    result = run_webhook_test(WebhookTestIn(channel="kol"))
+
+    assert result["ok"] is True
+    assert calls["url"] == KOL_URL
+    assert calls["secret"] == "kol-secret"
+    assert calls["title"] == "TickFlow Stock Panel 推送测试"
+    assert "推送配置正确" in calls["body"]
+    assert calls["msg_id"] and calls["msg_id"].startswith("tickflow-test-")
+
+
+def test_kol_not_configured_returns_ok_false(monkeypatch):
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_url", lambda: "")
+
+    result = run_webhook_test(WebhookTestIn(channel="kol"))
+
+    assert result["ok"] is False
+    assert "尚未配置" in result["detail"]
+
+
+def test_kol_invalid_saved_url_returns_ok_false(monkeypatch):
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_url", lambda: "notaurl")
+
+    result = run_webhook_test(WebhookTestIn(channel="kol"))
+
+    assert result["ok"] is False
+    assert "地址非法" in result["detail"]
 
 
 def test_unknown_channel_rejected_by_pydantic():

@@ -10,10 +10,12 @@ Python 侧判断 —— 已启用、周一~周五、处于任一时间窗内 (�
 本身不触发, 天级对齐, 重启/改配置不漂移) —— 全部满足才构建快照并发送。相比 IntervalTrigger: 改动配置只需写
 preferences.json (job 每 fire 重读), 无需增删 job; 窗口外的 fire 只是一次
 廉价的时间判断。
-发送格式: format=feishu 按飞书自定义机器人规范发 interactive 卡片 (走
-send_feishu_card); format=kol 按系统 KOL Webhook 简化格式发
-{"text","title","msg_id"} (+可选 timestamp/sign 签名, 幂等防重发);
-generic 原样 POST 快照 JSON (任意 http/s 下游)。
+发送格式: channels 多选推送平台 (feishu/wecom/kol), 地址复用「推送通知」的
+全局渠道配置 —— feishu 按飞书自定义机器人规范发 interactive 卡片 (走
+send_feishu_card); wecom 按企业微信群推送 Webhook 发 markdown 摘要;
+kol 按系统 KOL Webhook 简化格式发 {"text","title","msg_id"} (+可选
+timestamp/sign 签名, 幂等防重发)。显式传入 webhook_url 时原样 POST 快照
+JSON (generic, 测试端点兼容路径)。
 发送与快照构建都在线程池执行 (asyncio.to_thread), 不阻塞调度器事件循环。
 """
 from __future__ import annotations
@@ -523,6 +525,21 @@ def _send_feishu_board(url: str, secret: str, snapshot: dict) -> tuple[bool, str
     return ok, ("飞书卡片已发送" if ok else "飞书推送失败 (详见服务端日志)")
 
 
+def _send_wecom_board(url: str, snapshot: dict) -> tuple[bool, str]:
+    """按企业微信群推送 Webhook 把看板快照发为 markdown 摘要 (与复盘推送同通道)。"""
+    from app.services import webhook_adapter
+
+    if not webhook_adapter.is_valid_wecom_url(url):
+        return False, "企业微信 Webhook 地址非法, 请在「推送通知」中重新配置"
+    ov = snapshot.get("overview") if isinstance(snapshot.get("overview"), dict) else {}
+    emo = ov.get("emotion") or {}
+    as_of = snapshot.get("as_of") or "—"
+    subtitle = f"{as_of}" + (f" · 情绪 {emo.get('label')} {emo.get('score')}/100" if emo else "")
+    body = f"**{subtitle}**\n\n{render_board_markdown(snapshot)}" if subtitle else render_board_markdown(snapshot)
+    ok = webhook_adapter.send_wecom_markdown(url, "市场看板快照", body)
+    return ok, ("企业微信已发送" if ok else "企业微信推送失败 (详见服务端日志)")
+
+
 def _minute_stamp(snapshot: dict) -> str:
     """从快照 generated_at 取 HHMM 作为 msg_id 组成部分; 异常时退回当前北京时间。"""
     stamp = str(snapshot.get("generated_at") or "")
@@ -558,32 +575,55 @@ def _send_kol_board(url: str, secret: str, snapshot: dict) -> tuple[bool, str]:
     return send_generic_webhook(url, payload)
 
 
+def _resolve_targets(channels: list) -> list[tuple[str, str, str]]:
+    """把推送平台列表解析为 [(channel, url, secret)] (未知渠道忽略)。
+
+    地址复用「推送通知」的全局渠道配置; 地址未配置也保留目标, 让发送步骤
+    产出明确的「未配置」失败明细 (配置状态可见), 而不是静默跳过。
+    """
+    from app.services import preferences
+
+    targets: list[tuple[str, str, str]] = []
+    for ch in channels or []:
+        if ch == "feishu":
+            targets.append((ch, preferences.get_feishu_webhook_url(), preferences.get_feishu_webhook_secret()))
+        elif ch == "wecom":
+            targets.append((ch, preferences.get_wecom_webhook_url(), ""))
+        elif ch == "kol":
+            targets.append((ch, preferences.get_kol_webhook_url(), preferences.get_kol_webhook_secret()))
+    return targets
+
+
 def push_now(app_state: Any, webhook_url: str | None = None, cfg: dict | None = None) -> dict:
     """立即构建一次看板快照并发送 (定时触发与「测试推送」共用)。
 
-    format=feishu 按飞书自定义机器人规范发卡片摘要; 否则原样 POST 快照 JSON。
+    按 cfg.channels 选定的平台逐个投递 (feishu=飞书卡片 / wecom=企业微信
+    markdown / kol=KOL 简化格式), 地址复用「推送通知」的全局渠道配置;
+    显式传 webhook_url 时原样 POST 快照 JSON (generic, 测试端点兼容路径)。
 
     Args:
         app_state:   FastAPI app.state (供快照构建器读取 repo / 服务单例)。
-        webhook_url: 显式指定地址 (测试未保存的 URL), 否则用 cfg/偏好里的地址。
+        webhook_url: 显式指定地址 (generic 原样 POST), 忽略 cfg 里的平台选择。
         cfg:         已读取的推送配置, 缺省时重读偏好。
 
     Returns:
-        {ok, detail, as_of, snapshot_bytes, duration_ms}, 同时写入推送状态。
+        {ok, detail, as_of, snapshot_bytes, duration_ms}, 同时按渠道写入推送状态。
+        ok=所有目标均成功; detail 为各渠道明细拼接。
     """
-    from app.services import preferences
-    from app.services.webhook_adapter import is_valid_http_url, send_generic_webhook
+    from app.services.webhook_adapter import send_generic_webhook
 
-    cfg = cfg or preferences.get_webhook_push_schedule()
-    fmt = str(cfg.get("format") or "generic")
-    url = (webhook_url or cfg.get("webhook_url") or "").strip()
+    cfg = cfg or {}
     started = time.monotonic()
 
-    if not is_valid_http_url(url):
-        result = {"ok": False, "detail": "Webhook 地址未配置或非法", "as_of": None,
-                  "snapshot_bytes": 0, "duration_ms": 0}
-        _record_push_result(False, result["detail"], None, 0, fmt)
-        return result
+    if (webhook_url or "").strip():
+        targets = [("generic", webhook_url.strip(), "")]
+    else:
+        targets = _resolve_targets(cfg.get("channels") or [])
+        if not targets:
+            result = {"ok": False, "detail": "未选择推送平台, 请在「看板快照定时推送」中勾选",
+                      "as_of": None, "snapshot_bytes": 0, "duration_ms": 0}
+            _record_push_result(False, result["detail"], None, 0)
+            return result
 
     as_of: str | None = None
     try:
@@ -593,25 +633,37 @@ def push_now(app_state: Any, webhook_url: str | None = None, cfg: dict | None = 
     except Exception as e:  # 快照构建失败计入状态, 不抛出
         logger.exception("看板快照构建失败")
         detail = f"快照构建失败: {e}"
-        _record_push_result(False, detail, None, int((time.monotonic() - started) * 1000), fmt)
+        _record_push_result(False, detail, None, int((time.monotonic() - started) * 1000))
         return {"ok": False, "detail": detail, "as_of": None,
                 "snapshot_bytes": 0, "duration_ms": int((time.monotonic() - started) * 1000)}
 
-    secret = str(cfg.get("feishu_secret") or "")
-    if fmt == "feishu":
-        ok, send_detail = _send_feishu_board(url, secret, snapshot)
-    elif fmt == "kol":
-        ok, send_detail = _send_kol_board(url, secret, snapshot)
-    else:
-        ok, send_detail = send_generic_webhook(url, snapshot)
-    duration_ms = int((time.monotonic() - started) * 1000)
-    detail = f"{send_detail} · {len(body)} 字节"
-    _record_push_result(ok, detail, as_of, duration_ms, fmt)
-    if not ok:
-        # 不打印 URL: Webhook 地址本身即凭据, 不得进日志
-        logger.warning("看板快照推送失败: %s", send_detail)
-    return {"ok": ok, "detail": detail, "as_of": as_of,
-            "snapshot_bytes": len(body), "duration_ms": duration_ms}
+    # 快照只构建一次, 按渠道逐个投递; 每渠道独立记录状态 (排查哪个平台失败)
+    ok_all = True
+    details: list[str] = []
+    for ch, url, secret in targets:
+        if ch == "feishu":
+            ok, send_detail = (
+                _send_feishu_board(url, secret, snapshot) if url
+                else (False, "飞书 Webhook 未配置, 请在「推送通知」中配置"))
+        elif ch == "wecom":
+            ok, send_detail = (
+                _send_wecom_board(url, snapshot) if url
+                else (False, "企业微信 Webhook 未配置, 请在「推送通知」中配置"))
+        elif ch == "kol":
+            ok, send_detail = (
+                _send_kol_board(url, secret, snapshot) if url
+                else (False, "KOL Webhook 未配置, 请在「推送通知」中配置"))
+        else:  # generic: 显式地址原样 POST
+            ok, send_detail = send_generic_webhook(url, snapshot)
+        ok_all = ok_all and ok
+        detail = f"{send_detail} · {len(body)} 字节"
+        details.append(detail)
+        _record_push_result(ok, detail, as_of, int((time.monotonic() - started) * 1000), ch)
+        if not ok:
+            # 不打印 URL: Webhook 地址本身即凭据, 不得进日志
+            logger.warning("看板快照推送失败 (%s): %s", ch, send_detail)
+    return {"ok": ok_all, "detail": "; ".join(details), "as_of": as_of,
+            "snapshot_bytes": len(body), "duration_ms": int((time.monotonic() - started) * 1000)}
 
 
 def run_due_push(app_state: Any, now: datetime | None = None) -> dict | None:
@@ -634,9 +686,9 @@ def run_due_push(app_state: Any, now: datetime | None = None) -> dict | None:
             return None
         _last_push_minute = minute_key
 
-    if not (cfg.get("webhook_url") or "").strip():
-        # 保存入口已禁止 enabled 且无地址; 此处兜底 (手工改配置文件的场景)
-        logger.warning("看板定时推送已启用但未配置 Webhook 地址, 跳过")
+    if not (cfg.get("channels") or []):
+        # 保存入口已禁止 enabled 且无平台; 此处兜底 (手工改配置文件的场景)
+        logger.warning("看板定时推送已启用但未选择推送平台, 跳过 (设置 → 实时监控 → 看板快照定时推送)")
         return None
 
     return push_now(app_state, cfg=cfg)

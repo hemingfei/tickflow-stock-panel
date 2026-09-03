@@ -108,8 +108,9 @@ export function Review() {
   const reviewSched = prefs.data?.review_schedule ?? { enabled: false, hour: 15, minute: 10 }
   const feishuConfigured = !!(prefs.data?.feishu_webhook_url)
   const wecomConfigured = !!(prefs.data?.wecom_webhook_url)
+  const kolConfigured = !!(prefs.data?.kol_webhook_url)
   // 推送渠道是独立的顶层偏好(多选), 与定时 / 实时行情无关, 常驻可单独设置
-  // []=不推送, ['feishu']=飞书, ['wecom']=企业微信
+  // []=不推送, ['feishu']=飞书, ['wecom']=企业微信, ['kol']=KOL Webhook
   const reviewPushChannels = prefs.data?.review_push_channels ?? []
   // 弹窗内的本地草稿: 开关和时间都在本地改, 点「保存」才真正提交(避免开关一拨就关弹窗)
   const [draft, setDraft] = useState(reviewSched)
@@ -475,10 +476,31 @@ export function Review() {
                       {wecomConfigured ? '已配置' : '未配置'}
                     </span>
                   </button>
+                  {/* KOL Webhook(可用, 多选) */}
+                  <button
+                    type="button"
+                    disabled={pushMut.isPending}
+                    onClick={() => togglePushChannel('kol')}
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-btn border px-2.5 py-1.5 text-left transition-colors disabled:opacity-50',
+                      reviewPushChannels.includes('kol')
+                        ? 'border-accent/40 bg-accent/10'
+                        : 'border-border/60 bg-base/40 hover:bg-base/60',
+                    )}
+                  >
+                    <span className={cn('flex h-3 w-3 shrink-0 items-center justify-center rounded border', reviewPushChannels.includes('kol') ? 'border-accent bg-accent text-white' : 'border-border')}>
+                      {reviewPushChannels.includes('kol') && <Check className="h-2.5 w-2.5" />}
+                    </span>
+                    <span className="text-[11px] text-foreground">KOL Webhook</span>
+                    <span className="text-[9px] text-muted">vpush 简化格式</span>
+                    <span className={cn('ml-auto text-[9px]', kolConfigured ? 'text-emerald-500' : 'text-warning')}>
+                      {kolConfigured ? '已配置' : '未配置'}
+                    </span>
+                  </button>
                 </div>
                 <p className="mt-1.5 text-[10px] leading-relaxed text-muted/70">
                   手动或定时生成的复盘都会推送完整报告。复用「设置 → 实时监控」的 Webhook 配置。
-                  {((reviewPushChannels.includes('feishu') && !feishuConfigured) || (reviewPushChannels.includes('wecom') && !wecomConfigured)) && (
+                  {((reviewPushChannels.includes('feishu') && !feishuConfigured) || (reviewPushChannels.includes('wecom') && !wecomConfigured) || (reviewPushChannels.includes('kol') && !kolConfigured)) && (
                     <Link to="/settings?tab=monitoring&highlight=webhooks" className="ml-1 text-accent hover:underline" onClick={() => setShowSchedule(false)}>
                       前往配置 →
                     </Link>

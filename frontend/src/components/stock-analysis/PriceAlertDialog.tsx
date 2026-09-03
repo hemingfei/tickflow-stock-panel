@@ -106,6 +106,7 @@ export function PriceAlertDialog({
     const configured = new Set<string>()
     if (prefs.feishu_webhook_url) configured.add('feishu')
     if (prefs.wecom_webhook_url) configured.add('wecom')
+    if (prefs.kol_webhook_url) configured.add('kol')
     setChannels((prefs.webhook_default_channels ?? []).filter(channel => configured.has(channel)))
   }, [prefs])
 
@@ -328,6 +329,7 @@ export function PriceAlertDialog({
                   <input type="checkbox" checked disabled className="h-3.5 w-3.5 accent-sky-500" />站内
                 </label>
                 {([
+                  { key: 'kol', label: 'KOL', configured: !!prefs?.kol_webhook_url },
                   { key: 'feishu', label: '飞书', configured: !!prefs?.feishu_webhook_url },
                   { key: 'wecom', label: '企业微信', configured: !!prefs?.wecom_webhook_url },
                 ]).map(channel => (

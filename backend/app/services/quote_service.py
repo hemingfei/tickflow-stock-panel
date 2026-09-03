@@ -1407,7 +1407,7 @@ class QuoteService:
     def _maybe_send_webhook(self, rule_events: list[dict], engine) -> None:
         """把告警通过 Webhook 推送到外部 IM (由规则 webhook_channels 指定渠道)。
 
-        - 飞书 / 企业微信任一已配置即生效 (两个都没配才跳过)
+        - 飞书 / 企业微信 / KOL 任一已配置即生效 (全部未配置才跳过)
         - 仅推送 webhook_channels 非空的规则触发的告警, 且只投递被勾选的渠道
         - 失败静默, 不阻断主流程
         - 去重: 复用 MonitorRuleEngine 的 cooldown, 此处不重复去重
@@ -1422,8 +1422,10 @@ class QuoteService:
             feishu_url = preferences.get_feishu_webhook_url()
             feishu_secret = preferences.get_feishu_webhook_secret()
             wecom_url = preferences.get_wecom_webhook_url()
-            # 两个通道都没配置才跳过
-            if not feishu_url and not wecom_url:
+            kol_url = preferences.get_kol_webhook_url()
+            kol_secret = preferences.get_kol_webhook_secret()
+            # 所有通道都没配置才跳过
+            if not feishu_url and not wecom_url and not kol_url:
                 return
 
             # 反查规则, 过滤出启用推送的事件
@@ -1436,8 +1438,9 @@ class QuoteService:
             enqueued = 0
             for ev in rule_events:
                 rule = rules.get(ev.get("rule_id"))
-                # webhook_channels 指定命中的渠道 (['feishu'] / ['wecom'] / ['feishu','wecom'] / []).
-                # 空列表 = 该规则不推送。仅推送「渠道已选 + 对应地址已配置」的组合。
+                # webhook_channels 指定命中的渠道 (['feishu'] / ['wecom'] / ['kol'] /
+                # 任意组合 / []). 空列表 = 该规则不推送。
+                # 仅推送「渠道已选 + 对应地址已配置」的组合。
                 channels = rule.get("webhook_channels") if rule else None
                 if not channels:
                     continue
@@ -1449,7 +1452,7 @@ class QuoteService:
                 title = source_label
                 body = f"{symbol} {name} {message}".strip() if symbol else (message or name)
                 # 提交到独立线程池, 不阻塞行情轮询线程 (webhook 慢/重试不拖累实时行情+告警)。
-                # 按渠道独立投递: 飞书 / 企业微信谁被勾选且已配置就推谁。
+                # 按渠道独立投递: 勾选且已配置的渠道各推一份。
                 # 应用内 alerts.jsonl 记录与 SSE 已在前面完成, 不依赖 webhook 成败,
                 # 失败由 webhook_adapter 记 WARNING(可见)。
                 if feishu_url and "feishu" in channels:
@@ -1457,6 +1460,9 @@ class QuoteService:
                     enqueued += 1
                 if wecom_url and "wecom" in channels:
                     _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_wecom, wecom_url, title, body)
+                    enqueued += 1
+                if kol_url and "kol" in channels:
+                    _WEBHOOK_EXECUTOR.submit(webhook_adapter.send_kol, kol_url, title, body, kol_secret)
                     enqueued += 1
             if enqueued:
                 logger.info("Webhook 已提交 %d 条 (异步投递, 按渠道独立投递, 失败记 WARNING)", enqueued)

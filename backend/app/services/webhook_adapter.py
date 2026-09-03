@@ -397,3 +397,44 @@ def send_generic_webhook(webhook_url: str, payload: dict) -> tuple[bool, str]:
     logger.warning("通用 Webhook 推送最终失败(已重试 %d 次): %s", _GENERIC_MAX_ATTEMPTS, last_err)
     return False, last_err
 
+
+# ================================================================
+# 系统 KOL Webhook (vpush 简化格式)
+# ================================================================
+#
+# 与通用 Webhook 同为 POST JSON, 但请求体固定为 {"text","title","msg_id"}
+# (见 vpush「系统KOL-Webhook接入文档」); 可选 timestamp + sign 签名,
+# 签名算法与飞书自定义机器人一致 (复用 _gen_sign)。msg_id 为幂等键。
+
+_KOL_TEXT_MAX_LEN = 8000
+_KOL_TITLE_MAX_LEN = 200
+_KOL_MSG_ID_MAX_LEN = 128
+
+
+def send_kol(webhook_url: str, title: str, body: str, secret: str = "", msg_id: str | None = None) -> bool:
+    """按系统 KOL Webhook 简化格式发送一条 {"text","title","msg_id"} 消息。
+
+    msg_id 是下游幂等键: 缺省用随机 UUID, 网络重试沿用同一 payload 不会重复发帖;
+    调用方可传稳定键 (如 tickflow-review-<日期>) 让同日重复推送被下游去重。
+
+    Returns:
+        True=成功送达, False=失败。失败静默, 不抛异常 (与其他渠道一致)。
+    """
+    import uuid
+
+    text = (body or "").strip()
+    if not text:
+        return False
+
+    payload: dict = {
+        "text": text[:_KOL_TEXT_MAX_LEN],
+        "title": (title or "").strip()[:_KOL_TITLE_MAX_LEN],
+        "msg_id": (msg_id or uuid.uuid4().hex)[:_KOL_MSG_ID_MAX_LEN],
+    }
+    if secret:
+        timestamp = str(int(time.time()))
+        payload["timestamp"] = timestamp
+        payload["sign"] = _gen_sign(timestamp, secret)
+    ok, _detail = send_generic_webhook(webhook_url, payload)
+    return ok
+

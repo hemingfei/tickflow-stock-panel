@@ -115,6 +115,8 @@ def test_ladder_webhook_uses_chinese_title_without_brand(monkeypatch):
     monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "https://open.feishu.cn/open-apis/bot/v2/hook/test")
     monkeypatch.setattr("app.services.preferences.get_feishu_webhook_secret", lambda: "secret")
     monkeypatch.setattr("app.services.preferences.get_wecom_webhook_url", lambda: "wecom-key")
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_url", lambda: "")
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_secret", lambda: "")
 
     engine = type("Engine", (), {
         "rules": {"r_ladder": {"webhook_channels": ["feishu", "wecom"]}},
@@ -133,6 +135,44 @@ def test_ladder_webhook_uses_chinese_title_without_brand(monkeypatch):
 
     assert [args[1] for _, args in calls] == ["连板梯队", "连板梯队"]
     assert all("TickFlow" not in args[1] for _, args in calls)
+
+
+def test_ladder_webhook_kol_channel(monkeypatch):
+    """KOL 渠道: 告警按 send_kol(url, title, body, secret) 投递, 标题无品牌前缀。"""
+    calls = []
+
+    class CaptureExecutor:
+        def submit(self, fn, *args):
+            calls.append((fn, args))
+
+    monkeypatch.setattr(quote_service, "_WEBHOOK_EXECUTOR", CaptureExecutor())
+    monkeypatch.setattr("app.services.preferences.get_feishu_webhook_url", lambda: "")
+    monkeypatch.setattr("app.services.preferences.get_wecom_webhook_url", lambda: "")
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_url", lambda: "https://vpush.example.com/api/kol-webhook/tok")
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_secret", lambda: "kol-sec")
+
+    engine = type("Engine", (), {
+        "rules": {"r_ladder": {"webhook_channels": ["kol"]}},
+    })()
+    QuoteService._maybe_send_webhook(
+        object.__new__(QuoteService),
+        [{
+            "rule_id": "r_ladder",
+            "source": "ladder",
+            "symbol": "600000.SH",
+            "name": "浦发银行",
+            "message": "炸板预警",
+        }],
+        engine,
+    )
+
+    assert len(calls) == 1
+    fn, args = calls[0]
+    assert fn.__name__ == "send_kol"
+    assert args[0] == "https://vpush.example.com/api/kol-webhook/tok"
+    assert args[1] == "连板梯队"
+    assert "炸板预警" in args[2]
+    assert args[3] == "kol-sec"
 
 
 def test_review_webhooks_use_title_without_brand(monkeypatch):
@@ -154,3 +194,31 @@ def test_review_webhooks_use_title_without_brand(monkeypatch):
 
     assert [args[1] for _, args in calls] == ["每日复盘", "每日复盘"]
     assert all("TickFlow" not in args[1] for _, args in calls)
+
+
+def test_review_webhook_kol_channel(monkeypatch):
+    """KOL 渠道复盘推送: 简化格式, msg_id 按报告日幂等 (同日重复推送不重复发帖)。"""
+    calls = []
+    monkeypatch.setattr("app.services.preferences.get_review_push_channels", lambda: ["kol"])
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_url", lambda: "kol-url")
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_secret", lambda: "kol-sec")
+    monkeypatch.setattr(
+        "app.services.webhook_adapter.send_kol",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or True,
+    )
+
+    daily_pipeline._maybe_push_review("复盘正文", {"as_of": "2026-07-18"})
+
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[0] == "kol-url"
+    assert args[1] == "每日复盘"
+    assert "复盘正文" in args[2] and "2026-07-18" in args[2]
+    assert args[3] == "kol-sec"
+    assert kwargs["msg_id"] == "tickflow-review-2026-07-18"
+
+    # 渠道已选但地址未配置 → 静默跳过
+    monkeypatch.setattr("app.services.preferences.get_kol_webhook_url", lambda: "")
+    calls.clear()
+    daily_pipeline._maybe_push_review("复盘正文", {"as_of": "2026-07-18"})
+    assert calls == []

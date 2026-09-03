@@ -982,7 +982,7 @@ export interface MonitorRule {
   message: string
   webhook_url?: string
   webhook_enabled?: boolean  // 兼容老规则, 已由 webhook_channels 取代
-  webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom')
+  webhook_channels?: string[]  // 命中时推送的外部渠道 (合法值 'feishu' | 'wecom' | 'kol')
   created_at?: string
   runtime_warning?: string
   // ladder 专属: 封单监控; volume_delta 复用 metric 表示阈值口径 (volume=手数, amount=金额)
@@ -1730,6 +1730,9 @@ export interface Preferences {
   feishu_webhook_url?: string
   feishu_webhook_secret?: string
   wecom_webhook_url?: string
+  /** 系统 KOL Webhook 地址 (https://<域名>/api/kol-webhook/<token>) + 可选签名密钥 */
+  kol_webhook_url?: string
+  kol_webhook_secret?: string
   wecom_bot_id?: string
   wecom_bot_secret?: string
   wecom_bot_enabled?: boolean
@@ -1764,11 +1767,9 @@ export interface WebhookPushWindow {
 /** 看板快照定时推送配置 (时间窗列表, 至少 1 个) */
 export interface WebhookPushSchedule {
   enabled: boolean
-  /** generic=原样 POST 快照 JSON; feishu=飞书机器人卡片; kol=系统 KOL Webhook 简化格式 */
-  format: 'generic' | 'feishu' | 'kol'
-  webhook_url: string
-  /** 签名密钥 (飞书签名校验 / KOL Webhook 同一算法), 未配则空 */
-  feishu_secret: string
+  /** 推送平台多选: feishu=飞书卡片; wecom=企业微信 markdown; kol=系统 KOL Webhook 简化格式。
+   *  发送地址复用「推送通知」的全局渠道配置, 此处不再存地址/密钥。 */
+  channels: string[]
   /** 时间窗列表, 数量可增删 (至少 1 个), 每窗独立 开始/结束/间隔 */
   windows: WebhookPushWindow[]
 }
@@ -1780,7 +1781,7 @@ export interface WebhookPushStatus {
   last_ok: boolean | null
   last_detail: string
   last_as_of: string | null
-  /** 实际使用的推送格式 (generic/feishu/kol), 用于排查格式与接收端不匹配 */
+  /** 实际使用的推送平台 (feishu/wecom/kol/generic), 用于排查格式与接收端不匹配 */
   last_format: string | null
   recent: { time: string; ok: boolean; detail: string; as_of: string | null; duration_ms: number; format?: string | null }[]
 }
@@ -2072,18 +2073,23 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url }),
     }),
-  updateWebhookPushSchedule: (cfg: { enabled: boolean; format: string; webhook_url: string; feishu_secret: string; windows: WebhookPushWindow[] }) =>
+  updateKolWebhook: (url: string, secret: string = '') =>
+    request<{ kol_webhook_url: string; kol_webhook_secret: string }>('/api/settings/preferences/kol-webhook', {
+      method: 'PUT',
+      body: JSON.stringify({ url, secret }),
+    }),
+  updateWebhookPushSchedule: (cfg: { enabled: boolean; channels: string[]; windows: WebhookPushWindow[] }) =>
     request<{ webhook_push_schedule: WebhookPushSchedule }>('/api/settings/preferences/webhook-push-schedule', {
       method: 'PUT',
       body: JSON.stringify(cfg),
     }),
-  testWebhookPush: (payload?: { webhook_url?: string; format?: string; feishu_secret?: string }) =>
+  testWebhookPush: (payload?: { channels?: string[]; webhook_url?: string }) =>
     request<{ ok: boolean; detail: string; as_of: string | null; snapshot_bytes: number; duration_ms: number }>('/api/settings/webhook-push-test', {
       method: 'POST',
       body: JSON.stringify(payload ?? {}),
     }),
   webhookPushStatus: () => request<WebhookPushStatus>('/api/settings/webhook-push-status'),
-  sendTestWebhook: (channel: 'feishu' | 'wecom') =>
+  sendTestWebhook: (channel: 'feishu' | 'wecom' | 'kol') =>
     request<{ ok: boolean; detail: string }>('/api/settings/preferences/webhook-test', {
       method: 'POST',
       body: JSON.stringify({ channel }),

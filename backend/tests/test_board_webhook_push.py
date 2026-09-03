@@ -49,7 +49,7 @@ def _reset_push_state():
 def _cfg(**overrides) -> dict:
     cfg = {
         "enabled": True,
-        "webhook_url": "https://example.com/hook",
+        "channels": ["kol"],
         "windows": [{"start_time": "09:30", "end_time": "15:00", "interval_minutes": 5}],
     }
     cfg.update(overrides)
@@ -157,24 +157,69 @@ def test_parse_windows_legacy_flat_fields_fallback():
 
 # ---------- preferences 读写 ----------
 
+def test_kol_webhook_prefs_roundtrip_and_exposed(prefs_dir):
+    """KOL 渠道偏好: 读写往返, 并出现在 GET /preferences 响应中 (供前端展示配置态)。"""
+    assert preferences.get_kol_webhook_url() == ""
+    assert preferences.get_kol_webhook_secret() == ""
+    preferences.set_kol_webhook_url(" https://vpush.example.com/api/kol-webhook/tok ")
+    preferences.set_kol_webhook_secret("sec")
+    assert preferences.get_kol_webhook_url() == "https://vpush.example.com/api/kol-webhook/tok"
+    assert preferences.get_kol_webhook_secret() == "sec"
+    # 空串 = 清空
+    preferences.set_kol_webhook_url("")
+    assert preferences.get_kol_webhook_url() == ""
+
+    saved = settings_api.update_kol_webhook(settings_api.KolWebhookPrefsIn(
+        url="https://vpush.example.com/api/kol-webhook/t2", secret="s2"))
+    assert saved == {"kol_webhook_url": "https://vpush.example.com/api/kol-webhook/t2",
+                     "kol_webhook_secret": "s2"}
+    assert settings_api.get_preferences()["kol_webhook_url"] == \
+        "https://vpush.example.com/api/kol-webhook/t2"
+
+    with pytest.raises(HTTPException) as ei:  # 非 http(s) 地址
+        settings_api.update_kol_webhook(settings_api.KolWebhookPrefsIn(url="ftp://x"))
+    assert ei.value.status_code == 400
+
+
 def test_webhook_push_schedule_defaults_and_roundtrip(prefs_dir):
     assert preferences.get_webhook_push_schedule() == {
-        "enabled": False, "format": "generic", "webhook_url": "", "feishu_secret": "",
+        "enabled": False, "channels": [],
         "windows": [{"start_time": "09:30", "end_time": "11:30", "interval_minutes": 5}],
     }
     saved = preferences.set_webhook_push_schedule(
-        True, "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
+        True, ["feishu", "kol"],
         [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 7},
-         {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 15}],
-        "feishu", "mysecret")
+         {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 15}])
     assert saved == {
-        "enabled": True, "format": "feishu",
-        "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
-        "feishu_secret": "mysecret",
+        "enabled": True, "channels": ["feishu", "kol"],
         "windows": [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 7},
                     {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 15}],
     }
     assert preferences.get_webhook_push_schedule() == saved
+
+
+def test_webhook_push_schedule_legacy_format_migrated(prefs_dir):
+    """旧版 format 单选迁移: feishu/kol → 对应平台 (地址改由「推送通知」提供);
+    旧 generic (原样 POST 任意地址) 无中心地址可复用 → 空列表, 需重新勾选。"""
+    preferences.save({"webhook_push_schedule": {
+        "enabled": True, "format": "feishu",
+        "webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/abc",
+        "feishu_secret": "sec",
+        "windows": [{"start_time": "09:30", "end_time": "11:30", "interval_minutes": 5}]}})
+    cfg = preferences.get_webhook_push_schedule()
+    assert cfg["enabled"] is True and cfg["channels"] == ["feishu"]
+
+    preferences.save({"webhook_push_schedule": {"enabled": True, "format": "kol"}})
+    assert preferences.get_webhook_push_schedule()["channels"] == ["kol"]
+
+    preferences.save({"webhook_push_schedule": {"enabled": True, "format": "generic"}})
+    got = preferences.get_webhook_push_schedule()
+    assert got["enabled"] is True and got["channels"] == []
+
+    # 非法渠道值过滤, 保序
+    preferences.save({"webhook_push_schedule": {"enabled": False,
+                                                "channels": ["kol", "dingtalk", "feishu"]}})
+    assert preferences.get_webhook_push_schedule()["channels"] == ["kol", "feishu"]
 
 
 def test_webhook_push_schedule_legacy_flat_fields_migrated(prefs_dir):
@@ -187,7 +232,8 @@ def test_webhook_push_schedule_legacy_flat_fields_migrated(prefs_dir):
         "interval_minutes": 8,
     }})
     cfg = preferences.get_webhook_push_schedule()
-    assert cfg["enabled"] is True and cfg["format"] == "feishu"
+    assert cfg["enabled"] is True
+    assert cfg["channels"] == ["feishu"]  # 旧 format 单选随迁移转为平台列表
     assert cfg["windows"] == [
         {"start_time": "09:30", "end_time": "11:30", "interval_minutes": 8},
         {"start_time": "13:00", "end_time": "15:00", "interval_minutes": 8},
@@ -220,47 +266,41 @@ def test_webhook_push_schedule_get_normalizes_bad_windows(prefs_dir):
 
 def test_webhook_push_schedule_interval_clamped(prefs_dir):
     lo = preferences.set_webhook_push_schedule(
-        False, "", [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 0}])
+        False, [], [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 0}])
     hi = preferences.set_webhook_push_schedule(
-        False, "", [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 500}])
+        False, [], [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 500}])
     assert lo["windows"][0]["interval_minutes"] == 1
     assert hi["windows"][0]["interval_minutes"] == 120
 
 
 def test_webhook_push_schedule_validation(prefs_dir):
     win = {"start_time": "09:30", "end_time": "11:30", "interval_minutes": 5}
-    with pytest.raises(ValueError):  # 启用但 URL 非法
-        preferences.set_webhook_push_schedule(True, "ftp://x", [win])
+    with pytest.raises(ValueError):  # 启用但未选推送平台
+        preferences.set_webhook_push_schedule(True, [], [win])
+    with pytest.raises(ValueError):  # 启用但平台全为非法值 (被过滤后为空)
+        preferences.set_webhook_push_schedule(True, ["dingtalk"], [win])
     with pytest.raises(ValueError):  # 时间格式
         preferences.set_webhook_push_schedule(
-            False, "", [{"start_time": "930", "end_time": "11:30", "interval_minutes": 5}])
+            False, [], [{"start_time": "930", "end_time": "11:30", "interval_minutes": 5}])
     with pytest.raises(ValueError):  # 窗口倒置
         preferences.set_webhook_push_schedule(
-            False, "", [{"start_time": "15:00", "end_time": "09:30", "interval_minutes": 5}])
+            False, [], [{"start_time": "15:00", "end_time": "09:30", "interval_minutes": 5}])
     with pytest.raises(ValueError):  # 起止相等
         preferences.set_webhook_push_schedule(
-            False, "", [{"start_time": "09:30", "end_time": "09:30", "interval_minutes": 5}])
+            False, [], [{"start_time": "09:30", "end_time": "09:30", "interval_minutes": 5}])
     with pytest.raises(ValueError):  # 只填开始
         preferences.set_webhook_push_schedule(
-            False, "", [{"start_time": "13:00", "end_time": "", "interval_minutes": 5}])
+            False, [], [{"start_time": "13:00", "end_time": "", "interval_minutes": 5}])
     with pytest.raises(ValueError):  # 时间窗列表为空
-        preferences.set_webhook_push_schedule(False, "", [])
+        preferences.set_webhook_push_schedule(False, [], [])
     with pytest.raises(ValueError):  # 超出窗口数上限
         preferences.set_webhook_push_schedule(
-            False, "", [win] * (preferences.WEBHOOK_PUSH_MAX_WINDOWS + 1))
-    with pytest.raises(ValueError):  # 飞书格式但地址非飞书
-        preferences.set_webhook_push_schedule(
-            True, "https://example.com/hook", [win], format="feishu")
-    with pytest.raises(ValueError):  # 非法格式
-        preferences.set_webhook_push_schedule(
-            False, "https://example.com/hook", [win], format="dingtalk")
-    # kol 格式: 任意 http/s 地址可用 (系统 KOL Webhook)
-    kol_cfg = preferences.set_webhook_push_schedule(
-        True, "https://vpush.example.com/api/kol-webhook/tok", [win], format="kol")
-    assert kol_cfg["format"] == "kol"
-    # 多窗上限内保存成功, 各窗独立间隔
+            False, [], [win] * (preferences.WEBHOOK_PUSH_MAX_WINDOWS + 1))
+    # 白名单外渠道过滤, 保序去重; 多窗上限内保存成功, 各窗独立间隔
     multi = preferences.set_webhook_push_schedule(
-        False, "", [win, {"start_time": "13:00", "end_time": "15:00", "interval_minutes": 30}])
+        True, ["kol", "bad", "kol", "feishu"],
+        [win, {"start_time": "13:00", "end_time": "15:00", "interval_minutes": 30}])
+    assert multi["channels"] == ["kol", "feishu"]
     assert multi["windows"] == [
         win, {"start_time": "13:00", "end_time": "15:00", "interval_minutes": 30}]
 
@@ -339,11 +379,14 @@ def test_send_generic_webhook_rejects_non_http():
 # ---------- push_now / run_due_push / 状态 ----------
 
 def test_push_now_invalid_url_records_failure(prefs_dir):
+    """generic 兼容路径: 显式地址非法 → 失败并计入状态 (按渠道 generic 记录)。"""
+    push_svc.set_snapshot_builder(lambda state: {"as_of": "d"})
     result = push_svc.push_now(object(), webhook_url="bad")
     assert result["ok"] is False
     status = push_svc.get_push_status()
     assert status["last_ok"] is False
     assert status["recent"][0]["ok"] is False
+    assert status["last_format"] == "generic"
 
 
 def test_push_now_snapshot_failure_recorded(prefs_dir):
@@ -359,7 +402,7 @@ def test_push_now_snapshot_failure_recorded(prefs_dir):
 
 def test_run_due_push_skips_outside_window(prefs_dir):
     preferences.set_webhook_push_schedule(
-        True, "https://example.com/hook",
+        True, ["kol"],
         [{"start_time": "09:30", "end_time": "15:00", "interval_minutes": 5}])
     builder_calls = []
     push_svc.set_snapshot_builder(lambda state: builder_calls.append(state) or {})
@@ -372,9 +415,11 @@ def test_run_due_push_skips_outside_window(prefs_dir):
 
 def test_run_due_push_sends_snapshot_on_aligned_tick(prefs_dir, monkeypatch):
     preferences.set_webhook_push_schedule(
-        True, "https://example.com/hook",
+        True, ["kol"],
         [{"start_time": "09:30", "end_time": "15:00", "interval_minutes": 5}])
-    snapshot = {"schema_version": 1, "as_of": "2026-09-01", "overview": {}}
+    preferences.set_kol_webhook_url("https://vpush.example.com/api/kol-webhook/tok")
+    snapshot = {"schema_version": 1, "as_of": "2026-09-01", "overview": {},
+                "generated_at": "2026-09-01T09:35:00+08:00"}
     push_svc.set_snapshot_builder(lambda state: snapshot)
     sent = {}
     monkeypatch.setattr(
@@ -383,17 +428,20 @@ def test_run_due_push_sends_snapshot_on_aligned_tick(prefs_dir, monkeypatch):
     )
     result = push_svc.run_due_push(object(), now=datetime(2026, 9, 1, 9, 35, 20))
     assert result is not None and result["ok"] is True
-    assert sent["payload"] is snapshot  # 快照原样作为 JSON body
+    assert sent["url"] == "https://vpush.example.com/api/kol-webhook/tok"
+    assert sent["payload"]["msg_id"] == "tickflow-board-2026-09-01-0935"  # 幂等键: 交易日+触发分钟
     status = push_svc.get_push_status()
     assert status["last_ok"] is True
     assert status["last_as_of"] == "2026-09-01"
     assert status["last_success_at"] is not None
+    assert status["last_format"] == "kol"
 
 
 def test_run_due_push_dedupes_same_minute(prefs_dir, monkeypatch):
     preferences.set_webhook_push_schedule(
-        True, "https://example.com/hook",
+        True, ["kol"],
         [{"start_time": "09:30", "end_time": "15:00", "interval_minutes": 5}])
+    preferences.set_kol_webhook_url("https://vpush.example.com/api/kol-webhook/tok")
     push_svc.set_snapshot_builder(lambda state: {"as_of": "d"})
     monkeypatch.setattr(
         webhook_adapter, "send_generic_webhook", lambda url, payload: (True, "HTTP 200"))
@@ -405,10 +453,14 @@ def test_run_due_push_dedupes_same_minute(prefs_dir, monkeypatch):
     assert third is not None  # 下一个对齐点正常推送
 
 
-def test_run_due_push_enabled_without_url_skips(prefs_dir, monkeypatch):
+def test_run_due_push_enabled_without_channels_skips(prefs_dir, monkeypatch):
+    """已启用但未勾选平台 (含旧 generic 配置迁移后的空列表) → 跳过且不构建快照。"""
     monkeypatch.setattr(preferences, "get_webhook_push_schedule",
-                        lambda: _cfg(webhook_url=""))
+                        lambda: _cfg(channels=[]))
+    builder_calls = []
+    push_svc.set_snapshot_builder(lambda state: builder_calls.append(state) or {})
     assert push_svc.run_due_push(object(), now=datetime(2026, 9, 1, 9, 35)) is None
+    assert builder_calls == []
 
 
 # ---------- 飞书卡片渲染与发送 (format=feishu) ----------
@@ -541,7 +593,10 @@ def test_render_board_markdown_table():
 
 
 def test_push_now_feishu_format(prefs_dir, monkeypatch):
+    """channels 选 feishu: 地址/密钥取自「推送通知」全局配置。"""
     feishu_url = "https://open.feishu.cn/open-apis/bot/v2/hook/abc"
+    preferences.set_feishu_webhook_url(feishu_url)
+    preferences.set_feishu_webhook_secret("sec")
     snapshot = {"as_of": "2026-09-01", "overview": {"emotion": {"label": "回暖", "score": 62}}}
     push_svc.set_snapshot_builder(lambda state: snapshot)
     calls = {}
@@ -550,8 +605,7 @@ def test_push_now_feishu_format(prefs_dir, monkeypatch):
         lambda url, title, subtitle, body_md, secret="": calls.update(
             url=url, title=title, subtitle=subtitle, body=body_md, secret=secret) or True,
     )
-    result = push_svc.push_now(
-        object(), cfg=_cfg(format="feishu", webhook_url=feishu_url, feishu_secret="sec"))
+    result = push_svc.push_now(object(), cfg=_cfg(channels=["feishu"]))
     assert result["ok"] is True
     assert calls["url"] == feishu_url
     assert calls["title"] == "市场看板快照"
@@ -560,19 +614,40 @@ def test_push_now_feishu_format(prefs_dir, monkeypatch):
     assert "**情绪评分**: 回暖 62" in calls["body"] or "涨跌" in calls["body"]
     status = push_svc.get_push_status()
     assert status["last_ok"] is True
-    assert status["last_format"] == "feishu"  # 状态记录实际使用的格式, 便于排查格式错配
+    assert status["last_format"] == "feishu"  # 状态记录实际使用的渠道, 便于排查格式错配
 
-    # 飞书格式但地址非飞书 → 失败并计入状态
-    bad = push_svc.push_now(
-        object(), cfg=_cfg(format="feishu", webhook_url="https://example.com/hook"))
+    # 渠道已选但飞书地址非法 → 失败并计入状态
+    preferences.set_feishu_webhook_url("https://example.com/hook")
+    bad = push_svc.push_now(object(), cfg=_cfg(channels=["feishu"]))
     assert bad["ok"] is False
     assert "飞书" in bad["detail"]
     assert push_svc.get_push_status()["last_ok"] is False
 
 
+def test_push_now_wecom_format(prefs_dir, monkeypatch):
+    """channels 选 wecom: markdown 摘要走企业微信群推送通道。"""
+    preferences.set_wecom_webhook_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc")
+    snapshot = {"as_of": "2026-09-01", "overview": {"emotion": {"label": "回暖", "score": 62}}}
+    push_svc.set_snapshot_builder(lambda state: snapshot)
+    calls = {}
+    monkeypatch.setattr(
+        webhook_adapter, "send_wecom_markdown",
+        lambda url, title, body_md: calls.update(url=url, title=title, body=body_md) or True,
+    )
+    result = push_svc.push_now(object(), cfg=_cfg(channels=["wecom"]))
+    assert result["ok"] is True
+    assert calls["url"].startswith("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc")
+    assert calls["title"] == "市场看板快照"
+    assert "2026-09-01" in calls["body"] and "回暖" in calls["body"]
+    assert push_svc.get_push_status()["last_format"] == "wecom"
+
+
 def test_push_now_kol_format(prefs_dir, monkeypatch):
-    """KOL Webhook 简化格式: {"text","title","msg_id"} + 可选飞书同款签名。"""
+    """channels 选 kol: 简化格式 {"text","title","msg_id"} + 可选飞书同款签名,
+    地址/密钥取自「推送通知」全局配置。"""
     kol_url = "https://vpush.example.com/api/kol-webhook/tok"
+    preferences.set_kol_webhook_url(kol_url)
+    preferences.set_kol_webhook_secret("sec")
     snapshot = {
         "as_of": "2026-09-01",
         "generated_at": "2026-09-01T10:35:00+08:00",
@@ -586,8 +661,7 @@ def test_push_now_kol_format(prefs_dir, monkeypatch):
         lambda url, payload: calls.update(url=url, payload=payload) or (True, "HTTP 200"),
     )
 
-    result = push_svc.push_now(
-        object(), cfg=_cfg(format="kol", webhook_url=kol_url, feishu_secret="sec"))
+    result = push_svc.push_now(object(), cfg=_cfg(channels=["kol"]))
     assert result["ok"] is True
     assert calls["url"] == kol_url
     body = calls["payload"]
@@ -604,11 +678,32 @@ def test_push_now_kol_format(prefs_dir, monkeypatch):
 
     # 未配置密钥 → 不带 timestamp/sign
     calls.clear()
-    push_svc.push_now(object(), cfg=_cfg(format="kol", webhook_url=kol_url))
+    preferences.set_kol_webhook_secret("")
+    push_svc.push_now(object(), cfg=_cfg(channels=["kol"]))
     body2 = calls["payload"]
     assert "timestamp" not in body2 and "sign" not in body2
     assert body2["msg_id"] == "tickflow-board-2026-09-01-1035"
     assert push_svc.get_push_status()["last_format"] == "kol"
+
+
+def test_push_now_multi_channel_and_unconfigured(prefs_dir, monkeypatch):
+    """多平台逐个投递, ok=全部成功; 渠道地址未配置 → 明细可见, 不静默跳过。"""
+    preferences.set_kol_webhook_url("https://vpush.example.com/api/kol-webhook/tok")
+    # wecom 已选但未配置地址 → 该渠道失败
+    push_svc.set_snapshot_builder(lambda state: {"as_of": "2026-09-01"})
+    monkeypatch.setattr(
+        webhook_adapter, "send_generic_webhook", lambda url, payload: (True, "HTTP 200"))
+    result = push_svc.push_now(object(), cfg=_cfg(channels=["kol", "wecom"]))
+    assert result["ok"] is False
+    assert "未配置" in result["detail"]
+    assert push_svc.get_push_status()["last_format"] == "wecom"  # 逐渠道记录状态
+
+
+def test_push_now_without_channels_fails(prefs_dir):
+    """未勾选任何平台 → 明确失败 (定时路径由 run_due_push 提前跳过)。"""
+    result = push_svc.push_now(object(), cfg=_cfg(channels=[]))
+    assert result["ok"] is False
+    assert "推送平台" in result["detail"]
 
 
 # ---------- 看板快照结构 ----------
@@ -676,25 +771,26 @@ def test_snapshot_data_time_realtime_vs_close():
 def test_settings_api_webhook_push_schedule_roundtrip(prefs_dir):
     saved = settings_api.update_webhook_push_schedule(
         settings_api.WebhookPushScheduleIn(
-            enabled=True, webhook_url="https://example.com/hook",
+            enabled=True, channels=["feishu", "kol"],
             windows=[{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 10},
                      {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 20}],
         ))
     body = saved["webhook_push_schedule"]
     assert body["enabled"] is True
+    assert body["channels"] == ["feishu", "kol"]
     assert body["windows"][0] == {"start_time": "09:15", "end_time": "11:35",
                                   "interval_minutes": 10}
     assert body["windows"][1] == {"start_time": "13:05", "end_time": "15:05",
                                   "interval_minutes": 20}
-    assert body["format"] == "generic"
 
     prefs = settings_api.get_preferences()
+    assert prefs["webhook_push_schedule"]["channels"] == body["channels"]
     assert prefs["webhook_push_schedule"]["windows"] == body["windows"]
 
-    with pytest.raises(HTTPException) as ei:  # 启用但 URL 为空
+    with pytest.raises(HTTPException) as ei:  # 启用但未选平台
         settings_api.update_webhook_push_schedule(
             settings_api.WebhookPushScheduleIn(
-                enabled=True, webhook_url="",
+                enabled=True, channels=[],
                 windows=[{"start_time": "09:30", "end_time": "11:30",
                           "interval_minutes": 5}]))
     assert ei.value.status_code == 400
@@ -702,7 +798,7 @@ def test_settings_api_webhook_push_schedule_roundtrip(prefs_dir):
     with pytest.raises(HTTPException) as ei2:  # 窗口倒置
         settings_api.update_webhook_push_schedule(
             settings_api.WebhookPushScheduleIn(
-                enabled=False, webhook_url="",
+                enabled=False, channels=["feishu"],
                 windows=[{"start_time": "09:30", "end_time": "09:00",
                           "interval_minutes": 5}]))
     assert ei2.value.status_code == 400
@@ -710,7 +806,7 @@ def test_settings_api_webhook_push_schedule_roundtrip(prefs_dir):
     with pytest.raises(HTTPException) as ei3:  # 半窗
         settings_api.update_webhook_push_schedule(
             settings_api.WebhookPushScheduleIn(
-                enabled=False, webhook_url="",
+                enabled=False, channels=["feishu"],
                 windows=[{"start_time": "09:30", "end_time": "11:30",
                           "interval_minutes": 5},
                          {"start_time": "13:00", "end_time": "",
@@ -720,16 +816,16 @@ def test_settings_api_webhook_push_schedule_roundtrip(prefs_dir):
     with pytest.raises(ValidationError) as ei4:  # 空窗列表 → pydantic 422
         settings_api.update_webhook_push_schedule(
             settings_api.WebhookPushScheduleIn(
-                enabled=False, webhook_url="", windows=[]))
+                enabled=False, channels=["feishu"], windows=[]))
     assert "at least 1 item" in str(ei4.value)
 
-    with pytest.raises(HTTPException) as ei5:  # 飞书格式但地址非飞书
-        settings_api.update_webhook_push_schedule(
-            settings_api.WebhookPushScheduleIn(
-                enabled=True, format="feishu", webhook_url="https://example.com/hook",
-                windows=[{"start_time": "09:30", "end_time": "11:30",
-                          "interval_minutes": 5}]))
-    assert ei5.value.status_code == 400
+    # 白名单外渠道被过滤 (不再做地址格式校验: 地址复用「推送通知」配置)
+    saved2 = settings_api.update_webhook_push_schedule(
+        settings_api.WebhookPushScheduleIn(
+            enabled=False, channels=["kol", "dingtalk"],
+            windows=[{"start_time": "09:30", "end_time": "11:30",
+                      "interval_minutes": 5}]))
+    assert saved2["webhook_push_schedule"]["channels"] == ["kol"]
 
 
 def test_settings_api_test_push_endpoint(prefs_dir, monkeypatch):
@@ -743,24 +839,26 @@ def test_settings_api_test_push_endpoint(prefs_dir, monkeypatch):
     state = SimpleNamespace(repo=SimpleNamespace(store=SimpleNamespace(data_dir=prefs_dir)))
     request = SimpleNamespace(app=SimpleNamespace(state=state))
 
+    # 兼容路径: 显式 webhook_url → 原样 POST 快照 JSON (generic)
     result = settings_api.test_webhook_push(
         settings_api.WebhookPushTestIn(webhook_url="https://t.example/hook"), request)
     assert result["ok"] is True
     assert sent["url"] == "https://t.example/hook"
     assert sent["payload"] is snapshot
 
-    # 传 format → 按表单草稿格式发送 (kol): 载荷为简化格式而非原始快照, 草稿密钥参与签名
+    # 传 channels (前端测试按钮按勾选草稿): kol 平台, 地址取自「推送通知」配置
+    preferences.set_kol_webhook_url("https://vpush.example.com/api/kol-webhook/tok")
+    preferences.set_kol_webhook_secret("sec")
     sent.clear()
     settings_api.test_webhook_push(
-        settings_api.WebhookPushTestIn(
-            webhook_url="https://t.example/hook", format="kol", feishu_secret="sec"), request)
+        settings_api.WebhookPushTestIn(channels=["kol"]), request)
     body = sent["payload"]
     assert body["title"].startswith("市场看板快照 2026-09-01")
     assert body["text"] and body["msg_id"].startswith("tickflow-board-2026-09-01-")
-    assert body["sign"]  # 草稿密钥参与签名
+    assert body["sign"]  # 已保存的 KOL 密钥参与签名
     assert push_svc.get_push_status()["last_format"] == "kol"
 
-    # 请求体与已保存配置都没有地址 → 400
+    # 未勾选平台且已保存配置也为空 → 400
     with pytest.raises(HTTPException) as ei:
         settings_api.test_webhook_push(settings_api.WebhookPushTestIn(), request)
     assert ei.value.status_code == 400

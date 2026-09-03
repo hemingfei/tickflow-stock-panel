@@ -542,6 +542,8 @@ def get_preferences() -> dict:
             "feishu_webhook_url": preferences.get_feishu_webhook_url(),
             "feishu_webhook_secret": preferences.get_feishu_webhook_secret(),
             "wecom_webhook_url": preferences.get_wecom_webhook_url(),
+            "kol_webhook_url": preferences.get_kol_webhook_url(),
+            "kol_webhook_secret": preferences.get_kol_webhook_secret(),
             "wecom_bot_id": preferences.get_wecom_bot_id(),
             "wecom_bot_secret": preferences.get_wecom_bot_secret(),
             "wecom_bot_enabled": preferences.get_wecom_bot_enabled(),
@@ -1245,6 +1247,33 @@ def update_wecom_webhook(req: WecomWebhookPrefsIn) -> dict:
     return {"wecom_webhook_url": saved_url}
 
 
+class KolWebhookPrefsIn(BaseModel):
+    url: str
+    secret: str = ""
+
+
+@router.put("/preferences/kol-webhook")
+def update_kol_webhook(req: KolWebhookPrefsIn) -> dict:
+    """系统 KOL Webhook 地址 + 签名密钥 — 与飞书/企业微信并列的全局推送渠道。
+
+    - url: 传入空串表示清空配置; 非空需为 http(s):// 开头的地址
+      (https://<域名>/api/kol-webhook/<token>, 地址本身即凭据)。
+    - secret: 接收端启用签名校验时填密钥 (算法与飞书一致), 留空表示不验签。
+    """
+    from app.services import preferences, webhook_adapter
+
+    url = (req.url or "").strip()
+    if url and not webhook_adapter.is_valid_http_url(url):
+        raise HTTPException(
+            status_code=400,
+            detail="KOL Webhook 地址非法, 需以 http(s):// 开头 "
+                   "(https://<域名>/api/kol-webhook/<token>)",
+        )
+    saved_url = preferences.set_kol_webhook_url(url)
+    saved_secret = preferences.set_kol_webhook_secret((req.secret or "").strip())
+    return {"kol_webhook_url": saved_url, "kol_webhook_secret": saved_secret}
+
+
 class WebhookPushWindowIn(BaseModel):
     """单个推送时间窗: 北京时间 HH:MM 闭区间 + 该窗独立的推送间隔分钟。"""
 
@@ -1255,9 +1284,8 @@ class WebhookPushWindowIn(BaseModel):
 
 class WebhookPushScheduleIn(BaseModel):
     enabled: bool = False
-    format: str = "generic"
-    webhook_url: str = ""
-    feishu_secret: str = ""
+    # 推送平台多选 (feishu/wecom/kol), 发送地址复用「推送通知」的全局渠道配置
+    channels: list[str] = Field(default_factory=list)
     # 时间窗列表, 至少 1 个; 上限在 preferences 层校验 (WEBHOOK_PUSH_MAX_WINDOWS)
     windows: list[WebhookPushWindowIn] = Field(
         default_factory=lambda: [WebhookPushWindowIn()], min_length=1)
@@ -1265,12 +1293,11 @@ class WebhookPushScheduleIn(BaseModel):
 
 @router.put("/preferences/webhook-push-schedule")
 def update_webhook_push_schedule(req: WebhookPushScheduleIn) -> dict:
-    """看板快照定时推送配置 — 推送格式 + 时间窗列表 + 每窗独立间隔分钟。
+    """看板快照定时推送配置 — 推送平台多选 + 时间窗列表 + 每窗独立间隔分钟。
 
-    - format: generic=原样 POST 快照 JSON (任意 http/s 地址);
-      feishu=按飞书自定义机器人规范发 interactive 卡片 (地址须为飞书 hook 地址);
-      kol=系统 KOL Webhook 简化格式 {"text","title","msg_id"} (任意 http/s 地址)。
-      feishu_secret 为签名密钥 (飞书签名校验 / KOL Webhook 同一算法), 未配则留空。
+    - channels: 推送平台 (feishu=飞书机器人卡片 / wecom=企业微信 markdown 摘要 /
+      kol=系统 KOL Webhook 简化格式), 白名单外的值被过滤; 发送地址复用
+      「推送通知」的全局渠道配置, 启用时至少选择 1 个平台。
     - windows: 时间窗数量可配置 (至少 1 个, 至多 WEBHOOK_PUSH_MAX_WINDOWS 个),
       每窗需 开始 < 结束; 触发时刻为 开始时间 + N*间隔 (N>=1, 开始本身不触发)。
     - 保存即生效: 定时 job 每分钟重读本配置, 无需重启或重新注册调度任务。
@@ -1280,10 +1307,8 @@ def update_webhook_push_schedule(req: WebhookPushScheduleIn) -> dict:
     try:
         saved = preferences.set_webhook_push_schedule(
             enabled=req.enabled,
-            webhook_url=req.webhook_url,
+            channels=req.channels,
             windows=[w.model_dump() for w in req.windows],
-            format=req.format,
-            feishu_secret=req.feishu_secret,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1291,31 +1316,32 @@ def update_webhook_push_schedule(req: WebhookPushScheduleIn) -> dict:
 
 
 class WebhookPushTestIn(BaseModel):
+    channels: list[str] = Field(default_factory=list)
+    # 兼容: 显式地址 → 原样 POST 快照 JSON (generic), 忽略平台选择
     webhook_url: str = ""
-    format: str = ""
-    feishu_secret: str = ""
 
 
 @router.post("/webhook-push-test")
 def test_webhook_push(req: WebhookPushTestIn, request: Request) -> dict:
-    """立即构建一次看板快照并发送, 用于保存前验证 Webhook 连通性。
+    """立即构建一次看板快照并发送, 用于保存前验证推送配置连通性。
 
-    - 传 format (前端「测试推送」总传当前表单草稿): 按 format/feishu_secret/webhook_url
-      的草稿值发送, 与保存后的实际推送行为完全一致;
-    - 只传 webhook_url (API 直接调用): 回退到已保存配置的格式与密钥。
+    - 传 channels (前端「测试推送」总传当前勾选草稿): 按勾选平台逐个发送,
+      地址用「推送通知」已保存的全局渠道配置, 与实际推送行为一致;
+    - 传 webhook_url (API 直接调用): 原样 POST 快照 JSON 到该地址 (generic)。
     返回 {ok, detail, snapshot_bytes, ...}。
     """
     from app.services import board_webhook_push, preferences
 
+    if (req.webhook_url or "").strip():
+        return board_webhook_push.push_now(request.app.state, webhook_url=req.webhook_url.strip())
+
     saved = preferences.get_webhook_push_schedule()
-    url = (req.webhook_url or "").strip() or str(saved.get("webhook_url") or "").strip()
-    if not url:
-        raise HTTPException(status_code=400, detail="请先填写 Webhook 地址, 或先保存配置后再测试")
+    channels = [c for c in (req.channels or []) if c] or list(saved.get("channels") or [])
+    if not channels:
+        raise HTTPException(status_code=400,
+                            detail="请先勾选推送平台, 并确认对应渠道已在「推送通知」中配置")
     cfg = dict(saved)
-    cfg["webhook_url"] = url
-    if (req.format or "").strip():
-        cfg["format"] = req.format.strip()
-        cfg["feishu_secret"] = (req.feishu_secret or "").strip()
+    cfg["channels"] = channels
     # 同步 def 端点在线程池执行, 快照构建 + 网络请求不阻塞事件循环
     return board_webhook_push.push_now(request.app.state, cfg=cfg)
 
@@ -1328,7 +1354,7 @@ def webhook_push_status() -> dict:
 
 
 class WebhookTestIn(BaseModel):
-    channel: Literal["feishu", "wecom"]
+    channel: Literal["feishu", "wecom", "kol"]
 
 
 @router.post("/preferences/webhook-test")
@@ -1354,6 +1380,16 @@ def test_webhook(req: WebhookTestIn) -> dict:
         secret = preferences.get_feishu_webhook_secret()
         # 诊断用途单次尝试: 失败即返回, 不等生产退避重试 (~17s)
         ok = webhook_adapter.send_feishu(url, title, body, secret, max_attempts=1)
+    elif req.channel == "kol":
+        url = preferences.get_kol_webhook_url()
+        if not url:
+            return {"ok": False, "detail": "尚未配置 KOL Webhook, 请先保存"}
+        if not webhook_adapter.is_valid_http_url(url):
+            return {"ok": False, "detail": "已保存的 KOL Webhook 地址非法, 请重新保存"}
+        ok = webhook_adapter.send_kol(
+            url, title, body, preferences.get_kol_webhook_secret(),
+            msg_id=f"tickflow-test-{int(time.time())}",
+        )
     else:  # wecom
         url = preferences.get_wecom_webhook_url()
         if not url:

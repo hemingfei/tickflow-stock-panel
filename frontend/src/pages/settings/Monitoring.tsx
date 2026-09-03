@@ -8,6 +8,7 @@ import {
   Webhook,
   Clock,
   ChevronDown,
+  Check,
   Plus,
   Trash2,
 } from 'lucide-react'
@@ -89,6 +90,14 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const wecomWebhookUrl = prefs?.wecom_webhook_url ?? ''
   const [wecomDraft, setWecomDraft] = useState(wecomWebhookUrl)
   const [wecomError, setWecomError] = useState('')
+  // 系统 KOL Webhook (vpush 简化格式, 推送通知首位渠道)
+  const kolWebhookUrl = prefs?.kol_webhook_url ?? ''
+  const kolWebhookSecret = prefs?.kol_webhook_secret ?? ''
+  const [kolDraft, setKolDraft] = useState(kolWebhookUrl)
+  const [kolSecretDraft, setKolSecretDraft] = useState(kolWebhookSecret)
+  const [kolError, setKolError] = useState('')
+  // KOL 渠道配置区展开态 (推送通知卡片内)
+  const [kolOpen, setKolOpen] = useState(false)
   // 企业微信智能机器人 (BotID + Secret, 长连接通道)
   const wecomBotId = prefs?.wecom_bot_id ?? ''
   const wecomBotSecret = prefs?.wecom_bot_secret ?? ''
@@ -103,22 +112,18 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [wecomOpen, setWecomOpen] = useState(false)
   // 智能机器人配置区展开态
   const [botOpen, setBotOpen] = useState(false)
-  // 看板快照定时推送: 时间窗列表 (可增删, 至少 1 个, 每窗独立间隔) + 格式/地址,
-  // 按格式 (通用 JSON / 飞书卡片 / KOL) 推给用户 Webhook
+  // 看板快照定时推送: 时间窗列表 (可增删, 至少 1 个, 每窗独立间隔) + 推送平台多选,
+  // 地址复用上方「推送通知」的全局渠道配置, 无需重复填写
   const pushSched = prefs?.webhook_push_schedule
   const [pushEnabledDraft, setPushEnabledDraft] = useState(false)
-  const [pushFormatDraft, setPushFormatDraft] = useState<'generic' | 'feishu' | 'kol'>('generic')
-  const [pushUrlDraft, setPushUrlDraft] = useState('')
-  const [pushSecretDraft, setPushSecretDraft] = useState('')
+  const [pushChannelsDraft, setPushChannelsDraft] = useState<string[]>([])
   const [pushWindowsDraft, setPushWindowsDraft] = useState<WebhookPushWindow[]>([
     { start_time: '09:30', end_time: '11:30', interval_minutes: 5 },
   ])
   const [pushError, setPushError] = useState('')
   useEffect(() => {
     setPushEnabledDraft(pushSched?.enabled ?? false)
-    setPushFormatDraft(pushSched?.format ?? 'generic')
-    setPushUrlDraft(pushSched?.webhook_url ?? '')
-    setPushSecretDraft(pushSched?.feishu_secret ?? '')
+    setPushChannelsDraft(pushSched?.channels ?? [])
     const windows = pushSched?.windows
     setPushWindowsDraft(
       windows && windows.length > 0
@@ -138,6 +143,10 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   useEffect(() => {
     setWecomDraft(wecomWebhookUrl)
   }, [wecomWebhookUrl])
+  useEffect(() => {
+    setKolDraft(kolWebhookUrl)
+    setKolSecretDraft(kolWebhookSecret)
+  }, [kolWebhookUrl, kolWebhookSecret])
   useEffect(() => {
     setBotIdDraft(wecomBotId)
     setBotSecretDraft(wecomBotSecret)
@@ -211,11 +220,32 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     saveWecomWebhook.mutate(url)
   }, [wecomDraft, saveWecomWebhook])
 
+  const saveKolWebhook = useMutation({
+    mutationFn: ({ url, secret }: { url: string; secret: string }) => api.updateKolWebhook(url, secret),
+    onSuccess: () => {
+      setKolError('')
+      toast('KOL Webhook 已保存', 'success')
+      qc.invalidateQueries({ queryKey: QK.preferences })
+    },
+    onError: (err: any) => setKolError(String(err?.message ?? '保存失败')),
+  })
+  const submitKol = useCallback(() => {
+    const url = kolDraft.trim()
+    if (url && !/^https?:\/\//.test(url)) {
+      setKolError('KOL Webhook 地址需以 http(s):// 开头')
+      return
+    }
+    saveKolWebhook.mutate({ url, secret: kolSecretDraft.trim() })
+  }, [kolDraft, kolSecretDraft, saveKolWebhook])
+
   const testFeishu = useMutation({
     mutationFn: () => api.sendTestWebhook('feishu'),
   })
   const testWecom = useMutation({
     mutationFn: () => api.sendTestWebhook('wecom'),
+  })
+  const testKol = useMutation({
+    mutationFn: () => api.sendTestWebhook('kol'),
   })
 
   // 智能机器人 (BotID + Secret) 保存 → 后端立即重建连接
@@ -239,7 +269,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
   // ===== 看板快照定时推送 =====
   const savePushSchedule = useMutation({
-    mutationFn: (cfg: { enabled: boolean; format: string; webhook_url: string; feishu_secret: string; windows: WebhookPushWindow[] }) =>
+    mutationFn: (cfg: { enabled: boolean; channels: string[]; windows: WebhookPushWindow[] }) =>
       api.updateWebhookPushSchedule(cfg),
     onSuccess: () => {
       setPushError('')
@@ -260,14 +290,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const removePushWindow = (idx: number) => {
     setPushWindowsDraft(ws => (ws.length <= 1 ? ws : ws.filter((_, i) => i !== idx)))
   }
+  const togglePushChannelDraft = (ch: string) => {
+    setPushChannelsDraft(cs => (cs.includes(ch) ? cs.filter(c => c !== ch) : [...cs, ch]))
+  }
   const submitPushSchedule = useCallback(() => {
-    const url = pushUrlDraft.trim()
-    if (pushEnabledDraft && !/^https?:\/\//.test(url)) {
-      setPushError('启用前请填写 http(s):// 开头的 Webhook 地址')
-      return
-    }
-    if (pushFormatDraft === 'feishu' && url && !url.startsWith(FEISHU_PREFIX)) {
-      setPushError('飞书格式需为飞书自定义机器人地址 (' + FEISHU_PREFIX + '...)')
+    if (pushEnabledDraft && pushChannelsDraft.length === 0) {
+      setPushError('启用前请至少勾选一个推送平台 (并确认对应渠道已在「推送通知」中配置)')
       return
     }
     const windows: WebhookPushWindow[] = []
@@ -292,14 +320,12 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     }
     savePushSchedule.mutate({
       enabled: pushEnabledDraft,
-      format: pushFormatDraft,
-      webhook_url: url,
-      feishu_secret: pushSecretDraft.trim(),
+      channels: pushChannelsDraft,
       windows,
     })
-  }, [pushUrlDraft, pushWindowsDraft, pushEnabledDraft, pushFormatDraft, pushSecretDraft, savePushSchedule])
+  }, [pushChannelsDraft, pushWindowsDraft, pushEnabledDraft, savePushSchedule])
   const testPush = useMutation({
-    mutationFn: (draft: { webhook_url: string; format: string; feishu_secret: string }) =>
+    mutationFn: (draft: { channels?: string[]; webhook_url?: string }) =>
       api.testWebhookPush(draft),
     onSuccess: (res) => {
       toast(res.ok ? `测试推送成功 (${res.detail})` : `测试推送失败: ${res.detail}`, res.ok ? 'success' : 'error')
@@ -307,19 +333,14 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     },
     onError: (err: any) => toast(String(err?.message ?? '测试推送失败'), 'error'),
   })
-  // 测试推送按当前表单草稿发送 (无需先保存), 与保存后的实际推送行为一致
+  // 测试推送按当前勾选的平台发送 (地址用「推送通知」已保存的配置), 无需先保存本卡片
   const submitTestPush = useCallback(() => {
-    const url = pushUrlDraft.trim()
-    if (!/^https?:\/\//.test(url)) {
-      setPushError('请先填写 http(s):// 开头的 Webhook 地址')
+    if (pushChannelsDraft.length === 0) {
+      setPushError('请先勾选推送平台')
       return
     }
-    if (pushFormatDraft === 'feishu' && !url.startsWith(FEISHU_PREFIX)) {
-      setPushError('飞书格式需为飞书自定义机器人地址 (' + FEISHU_PREFIX + '...)')
-      return
-    }
-    testPush.mutate({ webhook_url: url, format: pushFormatDraft, feishu_secret: pushSecretDraft.trim() })
-  }, [pushUrlDraft, pushFormatDraft, pushSecretDraft, testPush])
+    testPush.mutate({ channels: pushChannelsDraft })
+  }, [pushChannelsDraft, testPush])
 
   // 智能机器人长连接开关(不改动凭证): 开启→连接, 关闭→断开
   const toggleBotConnection = useMutation({
@@ -342,6 +363,13 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
     },
     onError: () => toast('修正请求失败', 'error'),
   })
+
+  // 看板快照定时推送可选平台 (地址取自「推送通知」的全局渠道配置)
+  const PUSH_PLATFORMS = [
+    { key: 'feishu', label: '飞书', sub: '卡片摘要', configured: !!feishuWebhookUrl },
+    { key: 'wecom', label: '企业微信', sub: 'markdown 摘要', configured: !!wecomWebhookUrl },
+    { key: 'kol', label: 'KOL Webhook', sub: 'vpush 简化格式', configured: !!kolWebhookUrl },
+  ]
 
   useEffect(() => {
     setIntervalDraft(interval)
@@ -586,16 +614,97 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         </Card>
 
         {/* 推送通知 — 监控告警的外部推送渠道 (全局配置)。
-            飞书 / 企业微信。
+            KOL Webhook / 飞书 / 企业微信。
             每个渠道合并成一行: 勾选=新建规则默认推送, 点行展开地址配置。 */}
         <Card icon={Webhook} title="推送通知" anchor="webhooks">
           <p className="text-xs text-secondary mb-3">
             监控规则命中后,可把告警推送到外部。勾选渠道作为<b className="text-foreground/80">新建规则的默认推送</b>,
-            单条规则仍可在编辑页独立修改。
+            单条规则仍可在编辑页独立修改。此处配置的渠道也是「看板快照定时推送」「AI 复盘」的推送平台。
           </p>
 
           {/* 渠道列表 — 每行一个渠道, 勾选默认 + 点行展开地址配置 */}
           <div className="space-y-2">
+            {/* KOL Webhook (首位): 系统 vpush 大V接入, 勾选默认 + 展开地址配置 */}
+            <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
+              <div
+                onClick={() => setKolOpen(o => !o)}
+                className="flex items-center gap-2 px-2.5 py-2 cursor-pointer transition-colors hover:bg-base/60"
+              >
+                <input
+                  type="checkbox"
+                  checked={webhookDefaultChannels.includes('kol')}
+                  onChange={e => { e.stopPropagation(); toggleDefaultChannel('kol', e.target.checked) }}
+                  onClick={e => e.stopPropagation()}
+                  title="作为新建规则的默认推送渠道"
+                  className="h-3 w-3 accent-accent cursor-pointer"
+                />
+                <span className="text-[11px] font-medium text-foreground">KOL Webhook</span>
+                <span className="text-[9px] text-muted">vpush 简化格式</span>
+                {webhookDefaultChannels.includes('kol') && (
+                  <span className="rounded bg-accent/15 px-1 py-px text-[9px] text-accent">默认</span>
+                )}
+                <span className={`ml-auto text-[9px] ${kolWebhookUrl ? 'text-emerald-500' : 'text-warning'}`}>
+                  {kolWebhookUrl ? '已配置' : '未配置'}
+                </span>
+                <ChevronDown className={`h-3 w-3 text-muted transition-transform ${kolOpen ? 'rotate-180' : ''}`} />
+              </div>
+
+              {/* KOL 地址配置 — 行内展开 */}
+              {kolOpen && (
+                <div className="border-t border-border/60 bg-base/30 p-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-[11px] text-muted">Webhook 地址 (即凭据, 请妥善保管)</span>
+                    <input
+                      value={kolDraft}
+                      onChange={e => { setKolDraft(e.target.value); if (!testKol.isPending) testKol.reset() }}
+                      placeholder="https://<域名>/api/kol-webhook/<token>"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    />
+                  </label>
+
+                  <label className="block mt-2 space-y-1.5">
+                    <span className="text-[11px] text-muted">签名密钥 (可选 · KOL 签名校验, 与飞书同算法)</span>
+                    <input
+                      type="password"
+                      value={kolSecretDraft}
+                      onChange={e => { setKolSecretDraft(e.target.value); if (!testKol.isPending) testKol.reset() }}
+                      placeholder="接收端未启用签名校验则留空"
+                      className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
+                    />
+                  </label>
+
+                  {kolError && (
+                    <div className="mt-2 text-[11px] text-danger">{kolError}</div>
+                  )}
+
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={submitKol}
+                      disabled={saveKolWebhook.isPending || (kolDraft.trim() === kolWebhookUrl && kolSecretDraft.trim() === kolWebhookSecret)}
+                      className="px-3 py-1.5 rounded-btn bg-accent text-base text-xs font-medium disabled:opacity-50 cursor-pointer hover:bg-accent/90 transition-colors"
+                    >
+                      {saveKolWebhook.isPending ? '保存中…' : '保存'}
+                    </button>
+                    <TestSendButton test={testKol} configured={!!kolWebhookUrl} />
+                    {kolWebhookUrl && (
+                      <span className="text-[10px] text-emerald-500">● 已配置</span>
+                    )}
+                    <TestResult test={testKol} />
+                  </div>
+
+                  <details className="mt-3 text-[10px] text-muted">
+                    <summary className="cursor-pointer hover:text-secondary">什么是 KOL Webhook?</summary>
+                    <ol className="mt-1.5 space-y-1 pl-4 list-decimal leading-relaxed">
+                      <li>KOL Webhook 由 vpush 等推送系统分发, 地址形如 <b>https://&lt;域名&gt;/api/kol-webhook/&lt;token&gt;</b></li>
+                      <li>消息按简化格式发送 (&#123;"text","title","msg_id"&#125;), msg_id 幂等防重发</li>
+                      <li>接收端若启用签名校验, 把密钥一并填到「签名密钥」框 (算法与飞书一致)</li>
+                      <li>保存后可在「看板快照定时推送」「AI 复盘」等处直接勾选该平台</li>
+                    </ol>
+                  </details>
+                </div>
+              )}
+            </div>
+
             {/* 飞书 (可用): 勾选默认 + 展开地址配置 */}
             <div className="rounded-btn border border-border/60 bg-base/40 overflow-hidden">
               <div
@@ -857,15 +966,16 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           </div>
         </Card>
 
-        {/* 看板快照定时推送 — 窗口内按间隔把看板完整结构化 JSON POST 到用户 Webhook */}
+        {/* 看板快照定时推送 — 窗口内按间隔把看板快照推送到勾选的平台;
+            地址复用「推送通知」的全局渠道配置, 这里只选平台类型 */}
         <Card icon={Clock} title="看板快照定时推送" badge={pushSched?.enabled ? '已启用' : undefined}>
           <p className="text-xs text-secondary mb-3">
-            在多个时间窗内按各自间隔推送「市场看板」快照: <b className="text-foreground/80">飞书机器人</b>发 interactive 卡片;
-            <b className="text-foreground/80"> KOL Webhook</b> 发简化格式 (&#123;"text","title","msg_id"&#125;, 兼容 vpush 系统大V接入, 支持签名);
-            <b className="text-foreground/80"> 通用 JSON</b> 原样 POST 完整快照 (供程序复现看板)。
+            在多个时间窗内按各自间隔推送「市场看板」快照: <b className="text-foreground/80">飞书</b>发卡片摘要、
+            <b className="text-foreground/80"> 企业微信</b>发 markdown 摘要、
+            <b className="text-foreground/80"> KOL Webhook</b> 发简化格式 (&#123;"text","title","msg_id"&#125;, 兼容 vpush 系统大V接入)。
+            发送地址复用「<b className="text-foreground/80">推送通知</b>」中已配置的渠道, 这里只需勾选平台;
             仅周一至周五触发, 触发时刻为 各窗口开始时间 + N×间隔 (北京时间, N≥1 —— 开始时刻只作为计时起点, 本身不推送);
-            时间窗可增删, 至少保留 1 个。
-            「测试推送」按当前表单内容发送, 无需先保存。
+            时间窗可增删, 至少保留 1 个。「测试推送」按当前勾选的平台发送, 无需先保存本卡片。
           </p>
 
           <ToggleRow
@@ -876,51 +986,31 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
           />
 
           <div className="mt-1 space-y-2">
-            <label className="block space-y-1.5">
-              <span className="text-[11px] text-muted">
-                Webhook 地址 {pushFormatDraft === 'feishu'
-                  ? '(飞书自定义机器人地址)'
-                  : pushFormatDraft === 'kol'
-                    ? '(KOL Webhook 地址, 即凭据请妥善保管)'
-                    : '(任意 http/s 地址, 原样 POST JSON)'}
-              </span>
-              <input
-                value={pushUrlDraft}
-                onChange={e => setPushUrlDraft(e.target.value)}
-                placeholder={pushFormatDraft === 'feishu'
-                  ? FEISHU_PREFIX + 'xxxxxxxx'
-                  : pushFormatDraft === 'kol'
-                    ? 'https://<域名>/api/kol-webhook/<token>'
-                    : 'https://example.com/hook'}
-                className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
-              />
-            </label>
-
-            <div className="grid grid-cols-2 gap-2">
-              <label className="block space-y-1.5">
-                <span className="text-[11px] text-muted">推送格式</span>
-                <select
-                  value={pushFormatDraft}
-                  onChange={e => setPushFormatDraft(e.target.value as 'generic' | 'feishu' | 'kol')}
-                  className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:border-accent/50"
+            {/* 推送平台多选 — 与 AI 复盘「生成后推送完整报告」的平台勾选一致 */}
+            <div className="space-y-1.5">
+              <span className="text-[11px] text-muted">推送平台 (多选, 地址取自「推送通知」)</span>
+              {PUSH_PLATFORMS.map(p => (
+                <button
+                  key={p.key}
+                  type="button"
+                  disabled={savePushSchedule.isPending}
+                  onClick={() => togglePushChannelDraft(p.key)}
+                  className={`flex w-full items-center gap-2 rounded-btn border px-2.5 py-1.5 text-left transition-colors disabled:opacity-50 cursor-pointer ${
+                    pushChannelsDraft.includes(p.key)
+                      ? 'border-accent/40 bg-accent/10'
+                      : 'border-border/60 bg-base/40 hover:bg-base/60'
+                  }`}
                 >
-                  <option value="generic">通用 JSON (原样 POST 快照)</option>
-                  <option value="feishu">飞书机器人 (卡片摘要)</option>
-                  <option value="kol">KOL Webhook (简化格式)</option>
-                </select>
-              </label>
-              {pushFormatDraft !== 'generic' && (
-                <label className="block space-y-1.5">
-                  <span className="text-[11px] text-muted">签名密钥 (可选 · 飞书/KOL 签名校验)</span>
-                  <input
-                    type="password"
-                    value={pushSecretDraft}
-                    onChange={e => setPushSecretDraft(e.target.value)}
-                    placeholder="接收端未启用签名校验则留空"
-                    className="h-9 w-full rounded-btn border border-border bg-base px-3 text-xs font-mono text-foreground focus:outline-none focus:border-accent/50"
-                  />
-                </label>
-              )}
+                  <span className={`flex h-3 w-3 shrink-0 items-center justify-center rounded border ${pushChannelsDraft.includes(p.key) ? 'border-accent bg-accent text-base' : 'border-border'}`}>
+                    {pushChannelsDraft.includes(p.key) && <Check className="h-2.5 w-2.5" />}
+                  </span>
+                  <span className="text-[11px] text-foreground">{p.label}</span>
+                  <span className="text-[9px] text-muted">{p.sub}</span>
+                  <span className={`ml-auto text-[9px] ${p.configured ? 'text-emerald-500' : 'text-warning'}`}>
+                    {p.configured ? '已配置' : '未配置'}
+                  </span>
+                </button>
+              ))}
             </div>
 
             <div className="space-y-2">
@@ -1003,7 +1093,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                 const ps = pushStatus.data
                 if (!ps?.last_attempt_at) return <span className="text-[10px] text-muted">尚未推送</span>
                 const hhmm = ps.last_attempt_at.slice(11, 16)
-                const fmtTag = ps.last_format === 'kol' ? 'KOL' : ps.last_format === 'feishu' ? '飞书' : ps.last_format === 'generic' ? 'JSON' : ''
+                const fmtTag = ps.last_format === 'kol' ? 'KOL' : ps.last_format === 'feishu' ? '飞书' : ps.last_format === 'wecom' ? '企微' : ps.last_format === 'generic' ? 'JSON' : ''
                 return (
                   <span className={`text-[10px] ${ps.last_ok ? 'text-emerald-500' : 'text-danger'}`}>
                     {fmtTag && `[${fmtTag}] `}{ps.last_ok ? '●' : '✕'} 上次 {hhmm} {ps.last_ok ? '成功' : `失败 · ${ps.last_detail}`}

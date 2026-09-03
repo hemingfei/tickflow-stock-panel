@@ -86,6 +86,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const quoteInterval = quoteStatus?.interval_s
   const feishuConfigured = !!(prefs?.feishu_webhook_url)
   const wecomConfigured = !!(prefs?.wecom_webhook_url)
+  const kolConfigured = !!(prefs?.kol_webhook_url)
   const [editing] = useState(!!rule)
   // 新建规则: 预填全局「默认推送渠道」(多选数组), preset 显式指定时以 preset 为准。
   // 编辑规则: 完全沿用规则自身配置, 不受默认值影响。
@@ -1494,7 +1495,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </label>
       </div>
 
-      {/* Webhook 推送 — 飞书 / 企业微信 */}
+      {/* Webhook 推送 — KOL / 飞书 / 企业微信 */}
       <div className="rounded-btn border border-border/40 bg-base/40 p-3 space-y-2">
         <div className="flex items-center gap-1.5">
           <span className="text-[11px] font-medium text-foreground">Webhook 推送</span>
@@ -1503,6 +1504,23 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
 
         {/* 渠道列表 */}
         <div className="space-y-1.5">
+          {/* KOL Webhook (可用) */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={(draft.webhook_channels ?? []).includes('kol')}
+              onChange={() => toggleChannel('kol')}
+              className="h-3 w-3 accent-accent cursor-pointer"
+            />
+            <span className="text-[11px] text-foreground">KOL Webhook</span>
+            <span className="text-[9px] text-muted">vpush 简化格式</span>
+            {(draft.webhook_channels ?? []).includes('kol') && (
+              <span className={`ml-auto text-[9px] ${kolConfigured ? 'text-emerald-500' : 'text-warning'}`}>
+                {kolConfigured ? '已配置' : '未配置'}
+              </span>
+            )}
+          </label>
+
           {/* 飞书 (可用) */}
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -1543,6 +1561,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         {(draft.webhook_channels ?? []).length > 0 && (() => {
           const selected = draft.webhook_channels ?? []
           const unconfigured: string[] = []
+          if (selected.includes('kol') && !kolConfigured) unconfigured.push('KOL')
           if (selected.includes('feishu') && !feishuConfigured) unconfigured.push('飞书')
           if (selected.includes('wecom') && !wecomConfigured) unconfigured.push('企业微信')
           if (unconfigured.length === 0) return null
@@ -1556,6 +1575,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         {(draft.webhook_channels ?? []).length > 0 && (() => {
           const selected = draft.webhook_channels ?? []
           const ready: string[] = []
+          if (selected.includes('kol') && kolConfigured) ready.push('KOL')
           if (selected.includes('feishu') && feishuConfigured) ready.push('飞书')
           if (selected.includes('wecom') && wecomConfigured) ready.push('企业微信')
           if (ready.length === 0) return null

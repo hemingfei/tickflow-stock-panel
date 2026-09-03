@@ -572,10 +572,11 @@ function MonitorMenu({ stock, direction, sealMode, monitorRule, anchorRect, hasD
             </select>
           </div>
 
-          {/* 推送渠道: 胶囊标签 (飞书 / 企业微信 各自独立勾选), 选中带强调色 */}
+          {/* 推送渠道: 胶囊标签 (KOL / 飞书 / 企业微信 各自独立勾选), 选中带强调色 */}
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-muted shrink-0 w-8">推送</span>
             {([
+              { key: 'kol', label: 'KOL' },
               { key: 'feishu', label: '飞书' },
               { key: 'wecom', label: '企业微信' },
             ] as const).map(ch => {
