@@ -167,4 +167,7 @@ export const router = createBrowserRouter([
       }),
     ],
   },
-])
+], {
+  // 提前启用 React Router v7 行为, 消除 v6 控制台 future flag 警告
+  future: { v7_relativeSplatPath: true },
+})
