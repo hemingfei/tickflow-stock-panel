@@ -11,6 +11,7 @@ quote_service,depth_service}` 的依赖改为显式参数。
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 from datetime import date
@@ -18,9 +19,12 @@ from typing import Any
 
 import polars as pl
 
+from app.market_time import cn_today
 from app.services.ext_data import ExtConfig, ExtConfigStore
 from app.services.index_const import CORE_INDEX_NAMES, CORE_INDEX_SYMBOLS
 from app.services.screener import ScreenerService
+
+logger = logging.getLogger(__name__)
 
 # ================================================================
 # 常量(核心指数清单单一权威: app.services.index_const)
@@ -71,6 +75,30 @@ def _score(value: float, low: float, high: float) -> int:
     if high <= low:
         return 50
     return max(0, min(100, round((value - low) / (high - low) * 100)))
+
+
+def _money_calibration_factor(repo, as_of: date | None, rows: list[dict]) -> float | None:
+    """情绪量能维的盘中分布校准系数 (elapsed/240)/D(t); 不适用返回 None。
+
+    rows 的 vol_ratio_5d 已由增量路径按线性折算 ×240/elapsed, 乘本系数后
+    等于分布口径 raw/D(t), 与实时情绪页的折算数学等价。
+    """
+    if as_of is None or as_of != cn_today() or not rows:
+        return None
+    try:
+        from app.services import volume_profile
+
+        elapsed = volume_profile.today_elapsed_minutes([r.get("quote_ts") for r in rows])
+        if not 0 < elapsed < 240 or repo is None:
+            return None
+        profile = volume_profile.get_market_volume_profile(repo.store.data_dir, as_of)
+        dist = volume_profile.cum_ratio_at(profile, elapsed)
+        if not dist or dist <= 0:
+            return None
+        return (elapsed / 240.0) / dist
+    except Exception as e:  # noqa: BLE001
+        logger.warning("money calibration factor failed: %s", e)
+        return None
 
 
 # ================================================================
@@ -527,10 +555,21 @@ def build_market_overview(
     avg_vol_ratio = sum(vol_ratios) / len(vol_ratios) if vol_ratios else 1
     high_vol_ratio = sum(1 for v in vol_ratios if v >= 1.5)
 
+    # 情绪量能维专用校准: 盘中 rows 的 vol_ratio_5d 来自增量路径的线性折算
+    # (×240/elapsed, 隐含日内均匀分布), 乘 (elapsed/240)/D(t) 换算为历史同时段
+    # 分布口径, 与实时情绪页的折算数学等价。仅当日盘中生效; 历史日期复盘、
+    # 竞价 (elapsed=0) 与收盘后 (elapsed=240) 不校准; activity 展示保持
+    # 标准量比口径不动。
+    money_calib = _money_calibration_factor(repo, as_of, rows)
+    money_ratios = [v * money_calib for v in vol_ratios] if money_calib else vol_ratios
+    money_avg_vol_ratio = sum(money_ratios) / len(money_ratios) if money_ratios else 1
+    money_high_vol_ratio = sum(1 for v in money_ratios if v >= 1.5)
+
     concept_rank = _dimension_rank(rows, repo, "concept")
     industry_rank = _dimension_rank(rows, repo, "industry", level=2)
 
     strong_diff_pct = (strong_up - strong_down) / total * 100 if total else 0
+    money_high_vol_pct = money_high_vol_ratio / total * 100 if total else 0
     high_vol_pct = high_vol_ratio / total * 100 if total else 0
     strong_down_pct = strong_down / total * 100 if total else 0
     tier2_count = sum(t["count"] for t in tiers if t["boards"] >= 2)
@@ -542,7 +581,7 @@ def build_market_overview(
     radar = [
         {"key": "index", "label": "指数", "value": _score(avg_index_pct, -2.5, 2.5)},
         {"key": "profit", "label": "赚钱", "value": round(_score(up_pct, 20, 80) * 0.45 + _score(avg_pct, -0.02, 0.02) * 0.25 + _score(median_pct, -0.02, 0.02) * 0.20 + _score(strong_diff_pct, -8, 8) * 0.10)},
-        {"key": "money", "label": "量能", "value": round(_score(avg_vol_ratio, 0.6, 1.8) * 0.70 + _score(high_vol_pct, 2, 12) * 0.30)},
+        {"key": "money", "label": "量能", "value": round(_score(money_avg_vol_ratio, 0.6, 1.8) * 0.70 + _score(money_high_vol_pct, 2, 12) * 0.30)},
         {"key": "speculation", "label": "投机", "value": round(_score(limit_up, 5, 90) * 0.25 + _score(seal_rate, 30, 85) * 0.35 + _score(max_boards, 1, 8) * 0.25 + _score(tier2_count, 0, 30) * 0.15)},
         {"key": "resilience", "label": "抗跌", "value": 100 - round(_score(down_pct, 20, 80) * 0.55 + _score(strong_down_pct, 1, 12) * 0.45)},
         {"key": "mainline", "label": "主线", "value": mainline_score},

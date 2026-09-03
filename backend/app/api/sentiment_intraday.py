@@ -56,6 +56,7 @@ def intraday_sentiment_compute(request: Request, force: bool = Query(False)):
     service = get_intraday_sentiment_service()
     service.set_repo(request.app.state.repo)
     service.set_depth_service(getattr(request.app.state, "depth_service", None))
+    service.set_quote_service(getattr(request.app.state, "quote_service", None))
     result = service.compute_now(force=force)
     return {"success": result is not None, "data": result}
 

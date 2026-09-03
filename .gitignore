@@ -114,3 +114,10 @@ reports/cursor_tickflow_pro_rate_limit_p0.bundle
 .mimosa/
 backend/.mimosa/
 frontend/.mimosa/
+
+# ===== Docker 离线部署产物与本地覆盖配置 (不入库, 不随仓库上云) =====
+# 镜像 tar: 本机构建后 docker save 导出, 见 docs/offline-deployment.md
+tickflow-stock-panel.tar
+tickflow-stock-panel.tar.gz
+# 本地构建覆盖文件: 只留在开发机, 云端保留会导致镜像缺失时触发现场编译
+docker-compose.override.yml

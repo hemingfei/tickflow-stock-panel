@@ -371,6 +371,7 @@ async def _application_lifespan(app: FastAPI):
         intraday_sentiment_service = get_intraday_sentiment_service()
         intraday_sentiment_service.set_repo(repo)
         intraday_sentiment_service.set_depth_service(depth_service)
+        intraday_sentiment_service.set_quote_service(qs)
         app.state.intraday_sentiment_service = intraday_sentiment_service
         intraday_sentiment_service.start()
         logger.info("intraday sentiment service started")

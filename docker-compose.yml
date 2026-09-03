@@ -1,6 +1,9 @@
 services:
   app:
     image: tickflow-stock-panel:latest
+    # 镜像走离线导入(本机构建 → docker save → 云端 docker load, 见 docs/offline-deployment.md),
+    # 镜像缺失时直接报错, 不去远端仓库拉取或触发构建。
+    pull_policy: never
     container_name: tickflow-stock-panel
     restart: unless-stopped
     ports:

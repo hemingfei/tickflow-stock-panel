@@ -75,9 +75,15 @@ WORKDIR /app
 # Codex CLI 从官方 npm 包提取原生二进制，不依赖运行时 Node.js。
 # bookworm 自带 nodejs 18.19, 满足插件 engines>=18; --no-install-recommends 精简,
 # 自带 libnode/libc-ares 等全部动态依赖, 无需手动补库。
-# 国内构建走 apt mirror 已在 debian 镜像sources.list 配好, 无需额外换源。
 # tesseract-ocr: 自选截图导入（始终安装）; nodejs: 仅 INCLUDE_STOCKSDK=1 时安装
-RUN apt-get update \
+RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
+      # 尝试多个国内 apt 镜像源，任一成功即可（兼容新旧 Debian 源配置格式）
+      (find /etc/apt -name "*.sources" -type f -exec sed -i 's/deb.debian.org/mirrors.aliyun.com/g' {} \; 2>/dev/null || \
+       find /etc/apt -name "*.sources" -type f -exec sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' {} \; 2>/dev/null || \
+       sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list 2>/dev/null || \
+       sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list 2>/dev/null || true); \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
     && if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
          apt-get install -y --no-install-recommends nodejs \
@@ -86,6 +92,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && tesseract --version
 
+    
 # 安装 uv(快) —— 国内镜像下三重兜底:主源 → 备用源 → 官方源,
 # 任一成功即可,避免单一镜像同步延迟/故障导致构建失败。
 # uv 发版极频繁,国内镜像同步存在时间窗口,不锁版本且无 fallback 时
@@ -106,12 +113,19 @@ RUN sed -i 's|readme = "../README.md"|readme = "README.md"|g' pyproject.toml
 # uv 原生支持同时挂多个 index(主源 + 备用源),会自动在两源中查找,
 # 比逐个重试更稳健 —— 任一源缺包时另一源补位。
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
-      export UV_DEFAULT_INDEX="$PYPI_INDEX" UV_EXTRA_INDEX_URL="$PYPI_FALLBACK"; \
+      # 配置多个 PyPI 镜像源，提高成功率和下载速度
+      export UV_DEFAULT_INDEX="$PYPI_INDEX" \
+             UV_EXTRA_INDEX_URL="$PYPI_FALLBACK https://pypi.mirrors.ustc.edu.cn/simple https://mirrors.cloud.tencent.com/pypi/simple" \
+             UV_HTTP_TIMEOUT=120 \
+             UV_RETRY=5; \
+    else \
+      export UV_HTTP_TIMEOUT=120 UV_RETRY=5; \
     fi; \
     set -- --no-dev; \
     for extra in $BACKEND_EXTRAS; do \
       set -- "$@" --extra "$extra"; \
     done; \
+    # 先尝试用 frozen lockfile，失败则不用（容忍锁文件轻微不匹配）
     uv sync --frozen "$@" || uv sync "$@"
 
 # Backend code

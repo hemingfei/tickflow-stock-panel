@@ -14,7 +14,7 @@ import polars as pl
 
 from app.services import sentiment_builder
 from app.services.market_overview_builder import _score, _dimension_rank, _finite, CORE_INDEX_SYMBOLS
-from app.market_time import cn_now, cn_today, trading_minutes_elapsed
+from app.market_time import cn_now, cn_today
 from app.tickflow.repository import enriched_dirname
 from app.indicators.pipeline import compute_indicators, compute_limit_signals, compute_signals
 from app.parquet import scan_enriched_parquet
@@ -141,7 +141,78 @@ def append_intraday_sentiment(data_dir: Path, record: dict[str, Any], target_dat
     save_intraday_sentiment(data_dir, combined, target_date)
 
 
-def _compute_intraday_sentiment_impl(repo, depth_service=None) -> dict[str, Any] | None:
+def _build_index_pct_map(repo, target_date: date, quote_service=None) -> dict:
+    """构建 {date: {symbol: pct(百分比)}} 的指数涨幅映射, 供情绪六维的指数维使用。
+
+    quote_service 实时缓存优先 (change_pct 已是百分比口径, 与看板 _index_quotes
+    同源); 盘中指数日K分区仅在有指数监控规则时才被写盘, 依赖它会让指数维在盘中
+    拿到缺失或陈旧的涨幅。实时缓存不可用时回退指数日K (盘后路径, 小数制乘100)。
+    """
+    index_pct_map: dict = {}
+    if quote_service is not None:
+        try:
+            df_q = quote_service.get_index_quotes(list(CORE_INDEX_SYMBOLS))
+        except Exception as e:
+            logger.warning("intraday sentiment live index quotes failed: %s", e)
+            df_q = pl.DataFrame()
+        if not df_q.is_empty() and "change_pct" in df_q.columns and "symbol" in df_q.columns:
+            pcts = {
+                str(r["symbol"]): float(r["change_pct"])
+                for r in df_q.to_dicts()
+                if r.get("symbol") in CORE_INDEX_SYMBOLS and r.get("change_pct") is not None
+            }
+            if pcts:
+                index_pct_map[target_date] = pcts
+                return index_pct_map
+
+    try:
+        for symbol in CORE_INDEX_SYMBOLS:
+            df_idx = repo.get_index_daily(symbol, target_date, target_date, columns=["date", "change_pct"])
+            if not df_idx.is_empty() and "change_pct" in df_idx.columns:
+                for r in df_idx.iter_rows(named=True):
+                    idx_date = r["date"]
+                    pct = float(r.get("change_pct") or 0) * 100
+                    if idx_date not in index_pct_map:
+                        index_pct_map[idx_date] = {}
+                    index_pct_map[idx_date][symbol] = pct
+    except Exception as e:
+        logger.warning("index pct load failed for intraday: %s", e)
+    return index_pct_map
+
+
+def _intraday_elapsed_minutes(df_today: pl.DataFrame) -> float:
+    """今日行的已交易分钟数: 优先 quote_ts 中位数(真实成交时间), 兜底服务端时间。"""
+    from app.services import volume_profile
+
+    values = df_today["quote_ts"].drop_nulls().to_list() if "quote_ts" in df_today.columns else []
+    return volume_profile.today_elapsed_minutes(values)
+
+
+def _apply_vol_ratio_time_factor(repo, df_today: pl.DataFrame, target_date: date) -> pl.DataFrame:
+    """盘中量比折算: 累计量 → 全日等效量比。
+
+    compute_indicators 的 vol_ratio_5d = 今日累计成交量 / 前5日均量, 盘中
+    volume 是部分量, 必须折算后才能与看板量能维对齐。折算因子优先用历史
+    同时段分布 1/D(t) (volume_profile, 消除 A 股 U 型日内分布的偏差);
+    历史分钟数据不可用时回退线性折算 240/elapsed (同花顺标准量比口径)。
+    """
+    if df_today.is_empty() or "vol_ratio_5d" not in df_today.columns:
+        return df_today
+    elapsed = _intraday_elapsed_minutes(df_today)
+    factor: float | None = None
+    if elapsed and 0 < elapsed < 240:
+        from app.services import volume_profile
+
+        factor = volume_profile.calibration_factor(repo.store.data_dir, target_date, elapsed)
+        if factor is None:
+            factor = 240.0 / elapsed
+        df_today = df_today.with_columns(
+            (pl.col("vol_ratio_5d") * factor).alias("vol_ratio_5d"),
+        )
+    return df_today
+
+
+def _compute_intraday_sentiment_impl(repo, depth_service=None, quote_service=None) -> dict[str, Any] | None:
     """计算当前时刻的实时情绪指标。"""
     try:
         now = cn_now()
@@ -155,8 +226,8 @@ def _compute_intraday_sentiment_impl(repo, depth_service=None) -> dict[str, Any]
         
         # 加载今日数据（带预热）
         load_start = target_date - timedelta(days=150)
-        read_cols = ["symbol", "date", "open", "high", "low", "close", "volume", 
-                     "amount", "raw_close", "raw_high", "raw_low"]
+        read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
+                     "amount", "raw_close", "raw_high", "raw_low", "quote_ts"]
         
         try:
             lf = scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet")).filter(
@@ -194,21 +265,12 @@ def _compute_intraday_sentiment_impl(repo, depth_service=None) -> dict[str, Any]
         if df_today.is_empty():
             logger.warning("no today data for intraday sentiment")
             return None
+
+        # 量比折算到全日等效口径 (与看板一致)
+        df_today = _apply_vol_ratio_time_factor(repo, df_today, target_date)
         
-        # 加载指数数据
-        index_pct_map = {}
-        try:
-            for symbol in CORE_INDEX_SYMBOLS:
-                df_idx = repo.get_index_daily(symbol, target_date, target_date, columns=["date", "change_pct"])
-                if not df_idx.is_empty() and "change_pct" in df_idx.columns:
-                    for r in df_idx.iter_rows(named=True):
-                        idx_date = r["date"]
-                        pct = float(r.get("change_pct") or 0) * 100
-                        if idx_date not in index_pct_map:
-                            index_pct_map[idx_date] = {}
-                        index_pct_map[idx_date][symbol] = pct
-        except Exception as e:
-            logger.warning("index pct load failed for intraday: %s", e)
+        # 加载指数数据 (实时缓存优先, 回退指数日K)
+        index_pct_map = _build_index_pct_map(repo, target_date, quote_service)
         
         # 复用 sentiment_builder 的单日聚合逻辑
         record = sentiment_builder._aggregate_single_day(
@@ -242,18 +304,22 @@ class IntradaySentimentService:
         self._repo = None
         self._data_dir = None
         self._depth_service = None
+        self._quote_service = None
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
         self._last_calculation_time = None
-    
+
     def set_repo(self, repo):
         self._repo = repo
         if repo:
             self._data_dir = repo.store.data_dir
-    
+
     def set_depth_service(self, depth_service):
         self._depth_service = depth_service
+
+    def set_quote_service(self, quote_service):
+        self._quote_service = quote_service
     
     def compute_now(self, force: bool = False) -> dict[str, Any] | None:
         """立即计算一次实时情绪。"""
@@ -264,7 +330,7 @@ class IntradaySentimentService:
         if not force and not is_trading_time():
             return None
         
-        record = _compute_intraday_sentiment_impl(self._repo, self._depth_service)
+        record = _compute_intraday_sentiment_impl(self._repo, self._depth_service, self._quote_service)
         
         if record:
             append_intraday_sentiment(self._data_dir, record)
