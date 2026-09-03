@@ -37,6 +37,7 @@ const Regime = lazy(() => import('./pages/Regime').then(m => ({ default: m.Regim
 const EmotionCycle = lazy(() => import('./pages/EmotionCycle').then(m => ({ default: m.EmotionCycle })))
 const IntradaySentiment = lazy(() => import('./pages/IntradaySentiment').then(m => ({ default: m.IntradaySentiment })))
 const IntradayRegime = lazy(() => import('./pages/IntradayRegime').then(m => ({ default: m.IntradayRegime })))
+const IntradayRegimeSentiment = lazy(() => import('./pages/IntradayRegimeSentiment').then(m => ({ default: m.IntradayRegimeSentiment })))
 const LiveIndices = lazy(() => import('./pages/LiveIndices').then(m => ({ default: m.LiveIndices })))
 const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ default: m.AbnormalMoves })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
@@ -66,6 +67,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/emotion-cycle',
   '/intraday-sentiment',
   '/intraday-regime',
+  '/intraday-regime-sentiment',
   '/live-indices',
   '/watchlist-groups',
   '/branding',
@@ -145,6 +147,7 @@ export const router = createBrowserRouter([
       { path: 'emotion-cycle', element: <EmotionCycle /> },
       { path: 'intraday-sentiment', element: <IntradaySentiment /> },
       { path: 'intraday-regime', element: <IntradayRegime /> },
+      { path: 'intraday-regime-sentiment', element: <IntradayRegimeSentiment /> },
       { path: 'live-indices', element: <LiveIndices /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },

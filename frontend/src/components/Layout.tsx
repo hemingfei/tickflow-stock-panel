@@ -98,6 +98,7 @@ const nav = [
   { to: '/emotion-cycle', label: '情绪周期', icon: Activity, badge: 'beta' },
   { to: '/intraday-sentiment', label: '实时情绪', icon: Activity, badge: 'new' },
   { to: '/intraday-regime', label: '实时环境', icon: Activity, badge: 'new' },
+  { to: '/intraday-regime-sentiment', label: '实时环境情绪', icon: Activity, badge: 'new' },
   { to: '/live-indices', label: '实时指数', icon: Activity, badge: 'new' },
   { to: '/review',      label: '复盘',   icon: BookOpenCheck },
   { to: '/indices', label: '指数', icon: BarChart3 },
