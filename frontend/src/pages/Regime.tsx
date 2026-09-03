@@ -92,29 +92,56 @@ function useEChart(
 ) {
   const ref = useRef<HTMLDivElement>(null)
   const instRef = useRef<echarts.ECharts | null>(null)
+  const roRef = useRef<ResizeObserver | null>(null)
+  const optionRef = useRef(option)
+  optionRef.current = option
   useEffect(() => {
     const onResize = () => instRef.current?.resize()
     window.addEventListener('resize', onResize)
     return () => {
       window.removeEventListener('resize', onResize)
+      roRef.current?.disconnect()
+      roRef.current = null
       instRef.current?.dispose()
       instRef.current = null
     }
   }, [])
   useEffect(() => {
-    if (!ref.current) return
-    // 惰性 init: 图表容器可能条件渲染晚于组件挂载 (如情绪周期图依赖异步查询结果,
-    // 冷加载时首帧 rows 为空 → div 不在 DOM, 仅挂载时跑一次的 init 会扑空)。
-    // 数据到达后 option 变化触发本 effect, 此时 div 已挂载 — 补建实例再 setOption。
-    if (!instRef.current) {
-      instRef.current = echarts.init(ref.current, undefined, { renderer: 'canvas' })
-      onReady?.(instRef.current)
+    const el = ref.current
+    if (!el) return
+    const ensureInstance = () => {
+      if (!instRef.current) {
+        instRef.current = echarts.init(el, undefined, { renderer: 'canvas' })
+        onReady?.(instRef.current)
+      }
+      return instRef.current
     }
+    // 容器尚未完成布局 (0×0: 首帧未排版/tab display:none) 时 init 会产生
+    // "Can't get DOM width or height" 警告且画布为空 — 挂 ResizeObserver,
+    // 等首次非零尺寸再建实例并应用 option (惰性 init 的延伸:
+    // 数据到达时 div 已挂载, 但布局可能仍未完成)。
+    if (el.clientWidth === 0 || el.clientHeight === 0) {
+      if (!roRef.current) {
+        roRef.current = new ResizeObserver(() => {
+          if (el.clientWidth === 0 || el.clientHeight === 0) return
+          roRef.current?.disconnect()
+          roRef.current = null
+          const inst = ensureInstance()
+          if (optionRef.current) {
+            inst.setOption(optionRef.current, { notMerge: true })
+            inst.resize()
+          }
+        })
+        roRef.current.observe(el)
+      }
+      return
+    }
+    const inst = ensureInstance()
     if (option) {
-      instRef.current.setOption(option, { notMerge: true })
+      inst.setOption(option, { notMerge: true })
       // 容器可能经历 display:none(tab 隐藏) → 可见的切换, 画布尺寸需要按当前
       // 容器实际尺寸重算; 调用方把 view 等显隐依赖传入 deps 以触发本 effect。
-      instRef.current.resize()
+      inst.resize()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [option, ...deps])
