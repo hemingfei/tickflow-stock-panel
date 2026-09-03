@@ -351,7 +351,20 @@ async def _application_lifespan(app: FastAPI):
         logger.warning("monitor engine load failed: %s", e)
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service
-    
+
+    # 分组成员即自选成员: 启动时把统一存储里缺失于自选主列表的成员补入
+    # (覆盖旧数据迁移/备份恢复场景; 幂等, 已存在的不动)。软失败不阻断启动。
+    try:
+        from app.services import watchlist as _watchlist_svc
+        from app.services import watchlist_group_store as _group_store
+        added = _watchlist_svc.ensure_symbols(
+            [m["symbol"] for m in _group_store.load()["members"]]
+        )
+        if added:
+            logger.info("watchlist backfilled %d group members from group store", added)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("watchlist group member backfill failed (soft): %s", e)
+
     # 实时情绪服务
     try:
         from app.services.intraday_sentiment import get_intraday_sentiment_service
