@@ -109,3 +109,8 @@ TickFlowStockPanel.app/
 TickFlowStockPanel-macos*.dmg
 TickFlowStockPanel-macos*.zip
 reports/cursor_tickflow_pro_rate_limit_p0.bundle
+
+# Mimosa 安全扫描插件本地状态 (扫描报告/hook 状态/事件台账)
+.mimosa/
+backend/.mimosa/
+frontend/.mimosa/
