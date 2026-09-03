@@ -25,6 +25,9 @@ export const QK = {
   // Watchlist
   watchlist:            ['watchlist'] as const,
   watchlistGroups:      ['watchlist-groups'] as const,
+  // 自选板块 (WatchlistGroups 独立页面, /api/watchlist-groups/*, 数据结构 group_id/order)
+  // 与 main 的自选分组 ['watchlist-groups'] (id/color, M:N) 是两套数据, 缓存必须隔离
+  watchlistGroupBoards: ['watchlist-group-boards'] as const,
   watchlistQuotes:      ['watchlist-quotes'] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext] as const,
   // 异动边缘总览 (开启监控时才查询, 参数为 min_closeness/limit)

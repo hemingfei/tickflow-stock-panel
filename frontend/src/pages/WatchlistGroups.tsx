@@ -694,7 +694,7 @@ export function WatchlistGroups() {
   const createMutation = useMutation({
     mutationFn: (name: string) => api.watchlistGroupBoards.create(name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
       toast('分组创建成功')
       setCreateDialogOpen(false)
       setNewGroupName('')
@@ -705,7 +705,7 @@ export function WatchlistGroups() {
   const renameMutation = useMutation({
     mutationFn: ({ groupId, name }: { groupId: string; name: string }) => api.watchlistGroupBoards.rename(groupId, name),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
       toast('分组重命名成功')
       setRenameDialogOpen(false)
       setCurrentGroupForDialog(null)
@@ -716,7 +716,7 @@ export function WatchlistGroups() {
   const deleteMutation = useMutation({
     mutationFn: (groupId: string) => api.watchlistGroupBoards.delete(groupId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
       toast('分组删除成功')
       setDeleteDialogOpen(false)
       if (selectedGroupId === currentGroupForDialog?.group_id) {
@@ -731,7 +731,7 @@ export function WatchlistGroups() {
     mutationFn: ({ groupId, symbol }: { groupId: string; symbol: string }) => 
       api.watchlistGroupBoards.addItem(groupId, symbol),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
       // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
@@ -749,7 +749,7 @@ export function WatchlistGroups() {
     mutationFn: ({ groupId, symbol }: { groupId: string; symbol: string }) => 
       api.watchlistGroupBoards.removeItem(groupId, symbol),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
       // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
@@ -767,7 +767,7 @@ export function WatchlistGroups() {
     mutationFn: ({ groupId, symbols }: { groupId: string; symbols: string[] }) =>
       api.watchlistGroupBoards.reorderItems(groupId, symbols),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
       // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       if (selectedGroupId) {
@@ -784,7 +784,7 @@ export function WatchlistGroups() {
     mutationFn: (groupIds: string[]) =>
       api.watchlistGroupBoards.reorder(groupIds),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
     },
     onError: (e: any) => toast(e.message || '分组置顶失败', 'error'),
   })
@@ -812,7 +812,7 @@ export function WatchlistGroups() {
     mutationFn: ({ data, replace }: { data: any; replace: boolean }) =>
       api.watchlistGroupBoards.importConfig(data, replace),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
+      queryClient.invalidateQueries({ queryKey: QK.watchlistGroupBoards })
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-settings'] })
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-all-items'] })
       setImportDialogOpen(false)
@@ -885,7 +885,7 @@ export function WatchlistGroups() {
   const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
 
   // 数据查询
-  const groupsQuery = useQuery({ queryKey: QK.watchlistGroups, queryFn: api.watchlistGroupBoards.list })
+  const groupsQuery = useQuery({ queryKey: QK.watchlistGroupBoards, queryFn: api.watchlistGroupBoards.list })
 
   const selectedGroupItemsQuery = useQuery({
     queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId || '', extColumnsParam),
