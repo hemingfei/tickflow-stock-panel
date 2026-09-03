@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 
 from app.services import watchlist_group_store as store
+from app.services import watchlist as _watchlist_entries
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,8 @@ def add_item(group_id: str, symbol: str, note: str = "") -> list[dict]:
         "added_at": _now(),
     })
     store.save(data)
+    # 分组成员即自选成员: 标的不在自选主列表时自动补入
+    _watchlist_entries.ensure_symbols([symbol])
     return list_group_items(group_id)
 
 
@@ -226,6 +229,8 @@ def add_items_batch(group_id: str, symbols: list[str], note: str = "") -> tuple[
                 "added_at": _now(),
             })
         store.save(data)
+        # 分组成员即自选成员: 标的不在自选主列表时自动补入
+        _watchlist_entries.ensure_symbols(to_add)
 
     return list_group_items(group_id), added_count
 

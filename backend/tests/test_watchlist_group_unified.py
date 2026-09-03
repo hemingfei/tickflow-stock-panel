@@ -103,16 +103,11 @@ def test_membership_flows_across_views(monkeypatch, tmp_path):
     items = boards.list_group_items(gid)
     assert [i["symbol"] for i in items] == ["600000.SH"]
 
-    # 板块加入成员: 标的可不在自选中 (板块独立收录), 若同时在自选则 group_ids 反映
+    # 板块加入成员 → 自动进入自选主列表, 且条目 group_ids 同步
     boards.add_item(gid, "300750.SZ", note="板块来")
     rows = {r["symbol"]: r for r in watchlist.list_symbols()}
-    assert "300750.SZ" not in rows  # 不在自选的板块成员不进自选列表
-    assert rows["600000.SH"]["group_ids"] == [gid]
-
-    # 该标的加入自选后, 既有成员关系自动接上
-    watchlist.add("300750.SZ")
-    rows = {r["symbol"]: r for r in watchlist.list_symbols()}
     assert rows["300750.SZ"]["group_ids"] == [gid]
+    assert rows["600000.SH"]["group_ids"] == [gid]
     assert rows["300750.SZ"]["note"] == ""  # 板块组内备注不写自选条目备注
 
     # 板块删除成员 → main 条目 group_ids 摘除
@@ -140,3 +135,41 @@ def test_board_name_collides_with_main_group(monkeypatch, tmp_path):
     watchlist.create_group("重名组")
     with pytest.raises(ValueError, match="已存在"):
         boards.create_group("重名组")
+
+
+def test_ensure_symbols_appends_missing_preserving_order(monkeypatch, tmp_path):
+    """ensure_symbols: 缺失的按给定顺序追加到末尾, 已存在的不动。"""
+    watchlist.add("600000.SH")
+    watchlist.add("000001.SZ")
+    added = watchlist.ensure_symbols(["000001.SZ", "300750.SZ", "688981.SH", ""])
+    assert added == 2
+    # add 是插到最前: 已有顺序 [000001.SZ, 600000.SH]; 缺失的按给定顺序追加到末尾
+    rows = watchlist.list_symbols()
+    assert [r["symbol"] for r in rows] == ["000001.SZ", "600000.SH", "300750.SZ", "688981.SH"]
+
+
+def test_board_import_adds_members_into_watchlist(monkeypatch, tmp_path):
+    """板块导入后, 成员股票自动出现在自选主列表并带上分组归属。"""
+    config = {"version": 1, "groups": [
+        {"name": "导入组A", "items": [
+            {"symbol": "300750.SZ", "note": "", "order": 1, "added_at": ""},
+            {"symbol": "002463.SZ", "note": "", "order": 2, "added_at": ""},
+        ]},
+        {"name": "导入组B", "items": [
+            {"symbol": "688981.SH", "note": "", "order": 1, "added_at": ""},
+        ]},
+    ], "settings": {}}
+
+    boards.import_config(config, replace=True)
+
+    rows = {r["symbol"]: r for r in watchlist.list_symbols()}
+    assert set(rows) == {"300750.SZ", "002463.SZ", "688981.SH"}
+    by_name = {g["name"]: g["id"] for g in watchlist.list_groups()}
+    assert rows["300750.SZ"]["group_ids"] == [by_name["导入组A"]]
+    assert rows["688981.SH"]["group_ids"] == [by_name["导入组B"]]
+
+    # 板块删除成员只摘分组标签, 自选保留 (对齐自选分组语义)
+    gid_a = by_name["导入组A"]
+    boards.remove_item(gid_a, "300750.SZ")
+    rows = {r["symbol"]: r for r in watchlist.list_symbols()}
+    assert "300750.SZ" in rows and rows["300750.SZ"]["group_ids"] == []

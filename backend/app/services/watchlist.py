@@ -267,6 +267,35 @@ def remove(symbol: str) -> list[dict]:
         return df.to_dicts()
 
 
+def ensure_symbols(symbols: list[str]) -> int:
+    """确保标的存在于自选主列表 (缺失的按给定顺序追加到末尾)。返回新增数量。
+
+    分组成员即自选成员: 分组/板块的成员写入路径调用本函数补齐主列表,
+    已存在的标的保持原位置与备注不变。新条目的 group_ids 由 _write_entries
+    按统一存储成员关系自动同步。
+    """
+    cleaned = [s.strip().upper() for s in symbols if s and s.strip()]
+    if not cleaned:
+        return 0
+    with _LOCK:
+        df = _read_entries()
+        existing = set(df["symbol"].to_list()) if not df.is_empty() else set()
+        missing = [s for s in dict.fromkeys(cleaned) if s not in existing]
+        if not missing:
+            return 0
+        rows = df.to_dicts()
+        for s in missing:
+            rows.append({
+                "symbol": s,
+                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "note": "",
+                "group_ids": [],
+            })
+        out = pl.DataFrame(rows, schema=_ENTRY_SCHEMA) if rows else _empty_entries()
+        _write_entries(out)
+        return len(missing)
+
+
 def move_to_top(symbol: str) -> list[dict]:
     with _LOCK:
         df = _read_entries()
