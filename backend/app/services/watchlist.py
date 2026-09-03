@@ -1,16 +1,15 @@
 """自选股与分组服务。
 
-自选存储于 ``data/user_data/watchlist.parquet``，分组定义存储于同目录的
-``watchlist_groups.json``。
+自选存储于 ``data/user_data/watchlist.parquet``，分组定义与成员关系统一存于
+``watchlist_group_store.json`` (与自选板块共用单一数据源, 见 watchlist_group_store)。
 
 成员关系为多值 (M:N): 每条自选带 ``group_ids: list[str]``, 同一标的可同时
 属于多个分组; 移出分组只摘标签(标的仍在自选), 移出自选才删除实体。
-旧 schema (单值 ``group_id`` 列) 读取时自动迁移为 ``[group_id]``, 首次写回
-新 schema 前留一份 ``watchlist.parquet.bak`` 备份。
+entries.parquet 中的 ``group_ids`` 列为派生缓存 —— 读取时以统一存储校正,
+写入时按统一存储重算, 分组成员关系的权威数据在 watchlist_group_store。
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -24,6 +23,7 @@ from pathlib import Path
 import polars as pl
 
 from app.config import settings
+from app.services import watchlist_group_store as _group_store
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.client import get_client
 from app.tickflow.rate_limits import chunked, resolve_limit
@@ -69,14 +69,24 @@ def _path() -> Path:
     return p
 
 
-def _groups_path() -> Path:
-    p = settings.data_dir / "user_data" / "watchlist_groups.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
-
-
 def _empty_entries() -> pl.DataFrame:
     return pl.DataFrame(schema=_ENTRY_SCHEMA)
+
+
+def _sync_group_ids(df: pl.DataFrame) -> pl.DataFrame:
+    """以统一存储的成员关系覆盖 group_ids 派生缓存列。"""
+    if df.is_empty():
+        return df
+    mapping: dict[str, list[str]] = {}
+    for m in _group_store.load()["members"]:
+        mapping.setdefault(m["symbol"], []).append(m["group_id"])
+    return df.with_columns(
+        pl.Series(
+            "group_ids",
+            [mapping.get(s, []) for s in df["symbol"].to_list()],
+            dtype=pl.List(pl.Utf8),
+        )
+    )
 
 
 def _read_entries() -> pl.DataFrame:
@@ -96,10 +106,11 @@ def _read_entries() -> pl.DataFrame:
         df = df.with_columns(pl.lit("", dtype=pl.Utf8).alias("added_at"))
     if "note" not in df.columns:
         df = df.with_columns(pl.lit(None, dtype=pl.Utf8).alias("note"))
-    return df.select(list(_ENTRY_SCHEMA))
+    return _sync_group_ids(df.select(list(_ENTRY_SCHEMA)))
 
 
-def _write_entries(df: pl.DataFrame) -> None:
+def _write_entries(df: pl.DataFrame) -> pl.DataFrame:
+    """写盘自选条目; 返回按统一存储校正过 group_ids 的 DataFrame (供调用方返回)。"""
     global _REVISION
     p = _path()
     # 首次从旧 schema 迁移到 group_ids 前, 备份原文件(一次性)
@@ -109,41 +120,45 @@ def _write_entries(df: pl.DataFrame) -> None:
                 shutil.copy(p, p.with_suffix(p.suffix + ".bak"))
         except OSError as e:
             logger.warning("watchlist backup before migration failed: %s", e)
+    df = _sync_group_ids(df)
     tmp = p.with_suffix(p.suffix + ".tmp")
     df.select(list(_ENTRY_SCHEMA)).write_parquet(tmp)
     os.replace(tmp, p)
     _REVISION += 1
+    return df
 
 
 def _read_groups() -> list[dict]:
-    p = _groups_path()
-    if not p.exists():
-        return []
-    try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("自选分组配置损坏，请检查 watchlist_groups.json") from exc
-    if not isinstance(raw, list):
-        raise ValueError("自选分组配置格式不正确")
-    groups = []
-    for item in raw:
-        if not isinstance(item, dict) or not item.get("id") or not item.get("name"):
-            continue
-        color = str(item.get("color", DEFAULT_GROUP_COLOR))
-        groups.append({
-            "id": str(item["id"]),
-            "name": str(item["name"]),
-            "color": color if color in GROUP_COLORS else DEFAULT_GROUP_COLOR,
-        })
-    return groups
+    """分组定义 (统一存储投影, 按 order 排序 —— 与板块视图共享同一顺序)。"""
+    ordered = sorted(
+        _group_store.load()["groups"], key=lambda g: (g["order"], g["id"])
+    )
+    return [
+        {
+            "id": g["id"],
+            "name": g["name"],
+            "color": g["color"] if g["color"] in GROUP_COLORS else DEFAULT_GROUP_COLOR,
+        }
+        for g in ordered
+    ]
 
 
 def _write_groups(groups: list[dict]) -> None:
+    """按给定数组顺序写回分组定义 (order = 数组序, 保留既有 created_at)。"""
     global _REVISION
-    p = _groups_path()
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(groups, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, p)
+    data = _group_store.load()
+    old = {g["id"]: g for g in data["groups"]}
+    data["groups"] = [
+        {
+            "id": g["id"],
+            "name": g["name"],
+            "color": g["color"],
+            "order": i,
+            "created_at": old.get(g["id"], {}).get("created_at") or datetime.utcnow().isoformat(timespec="seconds"),
+        }
+        for i, g in enumerate(groups)
+    ]
+    _group_store.save(data)
     _REVISION += 1
 
 
@@ -217,15 +232,38 @@ def add_batch(
                 "note": note,
                 "group_ids": gids,
             })
+        # 成员关系并入统一存储 (apply_ids 中尚未属于的分组)
+        if apply_ids:
+            data = _group_store.load()
+            for gid in apply_ids:
+                owned = {m["symbol"] for m in data["members"] if m["group_id"] == gid}
+                count = sum(1 for m in data["members"] if m["group_id"] == gid)
+                for symbol in symbols:
+                    if symbol in owned:
+                        continue
+                    data["members"].append({
+                        "group_id": gid,
+                        "symbol": symbol,
+                        "order": count,
+                        "note": "",
+                        "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                    })
+                    count += 1
+            _group_store.save(data)
         out = pl.DataFrame(rows, schema=_ENTRY_SCHEMA) if rows else _empty_entries()
-        _write_entries(out)
+        out = _write_entries(out)
         return out.to_dicts(), added
 
 
 def remove(symbol: str) -> list[dict]:
     with _LOCK:
         df = _read_entries().filter(pl.col("symbol") != symbol)
-        _write_entries(df)
+        df = _write_entries(df)
+        data = _group_store.load()
+        kept = [m for m in data["members"] if m["symbol"] != symbol]
+        if len(kept) != len(data["members"]):
+            data["members"] = kept
+            _group_store.save(data)
         return df.to_dicts()
 
 
@@ -237,7 +275,7 @@ def move_to_top(symbol: str) -> list[dict]:
         target = df.filter(pl.col("symbol") == symbol)
         rest = df.filter(pl.col("symbol") != symbol)
         out = pl.concat([target, rest], how="diagonal_relaxed")
-        _write_entries(out)
+        out = _write_entries(out)
         return out.to_dicts()
 
 
@@ -248,6 +286,9 @@ def clear() -> int:
         count = df.height
         if count > 0:
             _write_entries(_empty_entries())
+            data = _group_store.load()
+            data["members"] = []
+            _group_store.save(data)
         return count
 
 
@@ -310,10 +351,13 @@ def delete_group(group_id: str) -> tuple[list[dict], list[dict]]:
         groups = _read_groups()
         if not any(group["id"] == group_id for group in groups):
             raise KeyError(group_id)
-        df = _strip_group(_read_entries(), group_id)
+        data = _group_store.load()
+        data["groups"] = [g for g in data["groups"] if g["id"] != group_id]
+        data["members"] = [m for m in data["members"] if m["group_id"] != group_id]
+        _group_store.save(data)
+        df = _read_entries()
+        df = _write_entries(df)
         remaining = [group for group in groups if group["id"] != group_id]
-        _write_entries(df)
-        _write_groups(remaining)
         return remaining, df.to_dicts()
 
 
@@ -329,11 +373,23 @@ def set_group(symbol: str, group_id: str | None) -> list[dict]:
         rows = _read_entries().to_dicts()
         if not any(row["symbol"] == symbol for row in rows):
             raise KeyError(symbol)
-        for row in rows:
-            if row["symbol"] == symbol:
-                row["group_ids"] = [group_id] if group_id is not None else []
+        data = _group_store.load()
+        old_notes = {
+            m["group_id"]: m["note"] for m in data["members"] if m["symbol"] == symbol
+        }
+        kept = [m for m in data["members"] if m["symbol"] != symbol]
+        if group_id is not None:
+            kept.append({
+                "group_id": group_id,
+                "symbol": symbol,
+                "order": 0,
+                "note": old_notes.get(group_id, ""),
+                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+            })
+        data["members"] = kept
+        _group_store.save(data)
         out = pl.DataFrame(rows, schema=_ENTRY_SCHEMA)
-        _write_entries(out)
+        out = _write_entries(out)
         return out.to_dicts()
 
 
@@ -345,14 +401,20 @@ def add_to_group(symbol: str, group_id: str) -> list[dict]:
         rows = _read_entries().to_dicts()
         if not any(row["symbol"] == symbol for row in rows):
             raise KeyError(symbol)
-        for row in rows:
-            if row["symbol"] == symbol:
-                gids = row["group_ids"] or []
-                if group_id not in gids:
-                    gids.append(group_id)
-                    row["group_ids"] = gids
+        data = _group_store.load()
+        if not any(
+            m["group_id"] == group_id and m["symbol"] == symbol for m in data["members"]
+        ):
+            data["members"].append({
+                "group_id": group_id,
+                "symbol": symbol,
+                "order": _group_store.group_member_count(data["members"], group_id),
+                "note": "",
+                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+            })
+            _group_store.save(data)
         out = pl.DataFrame(rows, schema=_ENTRY_SCHEMA)
-        _write_entries(out)
+        out = _write_entries(out)
         return out.to_dicts()
 
 
@@ -364,22 +426,15 @@ def remove_from_group(symbol: str, group_id: str) -> list[dict]:
         rows = _read_entries().to_dicts()
         if not any(row["symbol"] == symbol for row in rows):
             raise KeyError(symbol)
-        for row in rows:
-            if row["symbol"] == symbol:
-                row["group_ids"] = [g for g in (row["group_ids"] or []) if g != group_id]
+        data = _group_store.load()
+        data["members"] = [
+            m for m in data["members"]
+            if not (m["group_id"] == group_id and m["symbol"] == symbol)
+        ]
+        _group_store.save(data)
         out = pl.DataFrame(rows, schema=_ENTRY_SCHEMA)
-        _write_entries(out)
+        out = _write_entries(out)
         return out.to_dicts()
-
-
-def _strip_group(df: pl.DataFrame, group_id: str) -> pl.DataFrame:
-    """从所有条目的 group_ids 中摘掉指定分组(删除分组/清空分组共用)。"""
-    rows = df.to_dicts()
-    for row in rows:
-        gids = row.get("group_ids") or []
-        if group_id in gids:
-            row["group_ids"] = [g for g in gids if g != group_id]
-    return pl.DataFrame(rows, schema=_ENTRY_SCHEMA) if rows else _empty_entries()
 
 
 def clear_group(group_id: str) -> list[dict]:
@@ -388,8 +443,11 @@ def clear_group(group_id: str) -> list[dict]:
         groups = _read_groups()
         if not any(group["id"] == group_id for group in groups):
             raise KeyError(group_id)
-        df = _strip_group(_read_entries(), group_id)
-        _write_entries(df)
+        data = _group_store.load()
+        data["members"] = [m for m in data["members"] if m["group_id"] != group_id]
+        _group_store.save(data)
+        df = _read_entries()
+        df = _write_entries(df)
         return df.to_dicts()
 
 

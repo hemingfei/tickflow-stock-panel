@@ -257,10 +257,19 @@ def test_clear_group_strips_only_that_group(monkeypatch, tmp_path):
 
 
 def test_legacy_single_group_id_migration(monkeypatch, tmp_path):
-    """旧 schema(单值 group_id 列)读取迁移 + 首次写回前自动备份 .bak。"""
+    """旧 schema(单值 group_id 列)读取迁移 + 首次写回前自动备份 .bak。
+
+    统一存储之下, 条目上的组引用在首次读取时迁移进
+    watchlist_groups_store.json (需分组定义存在, 悬空引用会被清理)。
+    """
+    import json as _json
+
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     path = tmp_path / "user_data" / "watchlist.parquet"
     path.parent.mkdir(parents=True)
+    (tmp_path / "user_data" / "watchlist_groups.json").write_text(
+        _json.dumps([{"id": "g1", "name": "旧组", "color": "sky"}]), encoding="utf-8",
+    )
     pl.DataFrame({
         "symbol": ["600000.SH", "000001.SZ"],
         "added_at": ["2026-08-08T10:00:00"] * 2,
@@ -271,6 +280,7 @@ def test_legacy_single_group_id_migration(monkeypatch, tmp_path):
     rows = watchlist.list_symbols()
     assert rows[0]["group_ids"] == ["g1"]
     assert rows[1]["group_ids"] == []
+    assert (tmp_path / "user_data" / "watchlist_groups_store.json").exists()
     assert not (tmp_path / "user_data" / "watchlist.parquet.bak").exists()  # 只读不备份
 
     # 触发写入 → 备份生成, 文件落新 schema
