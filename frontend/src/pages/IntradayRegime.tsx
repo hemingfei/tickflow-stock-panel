@@ -362,61 +362,66 @@ export function IntradayRegime() {
         </div>
       </div>
 
-      {latest ? (
-        <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_3fr]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className={cn(cardCls, 'p-3')}>
-            <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Gauge className="h-3 w-3" />
-              最新环境 · {latest.time}
-            </div>
-            <div className="mt-1.5 flex items-baseline gap-2">
-              <span className="text-2xl font-bold" style={{ color: regimeLabelToColor(REGIME_STATE_LABELS[latest.state]) }}>
-                {REGIME_STATE_LABELS[latest.state]}
-              </span>
-              <span className="text-sm text-muted">{latest.score} 分</span>
-            </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-base">
-              <div className="h-full rounded-full transition-all"
-                style={{ width: `${Math.max(2, Math.min(100, latest.score))}%`, backgroundColor: regimeLabelToColor(REGIME_STATE_LABELS[latest.state]) }} />
-            </div>
+            <SectionTitle icon={Activity} title={hoverIndex != null ? "选中时刻" : "最新雷达图"} hint={latest ? latest.time : ''} />
+            <div ref={radarRef} className="mt-2 h-[320px]" />
           </div>
 
-          <div className={cn(cardCls, 'p-3')}>
-            <div className="flex items-center gap-1.5 text-[10px] text-muted">
-              <Activity className="h-3 w-3" />
-              四维拆解
-            </div>
-            <div className="mt-2 space-y-1">
-              {[
-                { label: '赚钱', val: latest.profit_score, color: '#f59e0b' },
-                { label: '投机', val: latest.speculation_score, color: '#a855f7' },
-                { label: '抗跌', val: latest.resilience_score, color: '#10b981' },
-                { label: '趋势', val: latest.trend_score, color: '#3b82f6' },
-              ].map(d => (
-                <div key={d.label} className="flex items-center gap-1.5">
-                  <span className="w-6 shrink-0 text-[9px] text-muted">{d.label}</span>
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-base">
-                    <div className="h-full rounded-full transition-all"
-                      style={{ width: `${d.val ?? 0}%`, backgroundColor: d.color }} />
+          <div className="flex flex-col gap-4">
+            {latest ? (
+              <>
+                <div className={cn(cardCls, 'flex-1 p-3')}>
+                  <div className="flex items-center gap-1.5 text-[10px] text-muted">
+                    <Gauge className="h-3 w-3" />
+                    最新环境 · {latest.time}
                   </div>
-                  <span className="w-5 shrink-0 text-right text-[9px] font-mono text-muted">{d.val ?? '—'}</span>
+                  <div className="mt-1.5 flex items-baseline gap-2">
+                    <span className="text-2xl font-bold" style={{ color: regimeLabelToColor(REGIME_STATE_LABELS[latest.state]) }}>
+                      {REGIME_STATE_LABELS[latest.state]}
+                    </span>
+                    <span className="text-sm text-muted">{latest.score} 分</span>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-base">
+                    <div className="h-full rounded-full transition-all"
+                      style={{ width: `${Math.max(2, Math.min(100, latest.score))}%`, backgroundColor: regimeLabelToColor(REGIME_STATE_LABELS[latest.state]) }} />
+                  </div>
                 </div>
-              ))}
-            </div>
+
+                <div className={cn(cardCls, 'flex flex-[2] flex-col p-3')}>
+                  <div className="flex items-center gap-1.5 text-[10px] text-muted">
+                    <Activity className="h-3 w-3" />
+                    四维拆解
+                  </div>
+                  <div className="mt-2 flex flex-1 flex-col justify-evenly gap-1">
+                    {[
+                      { label: '赚钱', val: latest.profit_score, color: '#f59e0b' },
+                      { label: '投机', val: latest.speculation_score, color: '#a855f7' },
+                      { label: '抗跌', val: latest.resilience_score, color: '#10b981' },
+                      { label: '趋势', val: latest.trend_score, color: '#3b82f6' },
+                    ].map(d => (
+                      <div key={d.label} className="flex items-center gap-1.5">
+                        <span className="w-6 shrink-0 text-[9px] text-muted">{d.label}</span>
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-base">
+                          <div className="h-full rounded-full transition-all"
+                            style={{ width: `${d.val ?? 0}%`, backgroundColor: d.color }} />
+                        </div>
+                        <span className="w-5 shrink-0 text-right text-[9px] font-mono text-muted">{d.val ?? '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-1 items-center justify-center rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
+                {history.isLoading ? '加载中…' : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
+              </div>
+            )}
           </div>
         </div>
-      ) : (
-        <div className="rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-          {history.isLoading ? '加载中…' : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
-        </div>
-      )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className={cn(cardCls, 'p-3')}>
-          <SectionTitle icon={Activity} title={hoverIndex != null ? "选中时刻" : "最新雷达图"} hint={latest ? latest.time : ''} />
-          <div ref={radarRef} className="mt-2 h-[320px]" />
-        </div>
-        <div className={cn(cardCls, 'p-3 lg:col-span-2')}>
           <SectionTitle icon={Activity} title="环境综合分走势" hint="分钟级更新 · 点击图例切换维度" />
           <div ref={trendRef} className="mt-2 h-[320px]" />
         </div>
