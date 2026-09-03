@@ -21,7 +21,7 @@ import {
 } from '@/components/DimensionMembersDialog'
 import { ColumnCustomizer } from '@/components/ColumnCustomizer'
 import { storage } from '@/lib/storage'
-import { api, type WatchlistGroup, type MinuteKlineRow } from '@/lib/api'
+import { api, type WatchlistGroupBoard, type MinuteKlineRow } from '@/lib/api'
 import { useQuoteStatus, useCapabilities, usePreferences } from '@/lib/useSharedQueries'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { getSignals, signalCls } from '@/lib/stock-table'
@@ -349,7 +349,7 @@ function GroupCard({
   avgPctMode,
   items,
 }: {
-  group: WatchlistGroup
+  group: WatchlistGroupBoard
   onSelect: (groupId: string) => void
   avgPctMode: 'simple' | 'weighted'
   items?: any[]
@@ -584,7 +584,7 @@ export function WatchlistGroups() {
   const [renameDialogOpen, setRenameDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [sidebarSettingsMenuOpen, setSidebarSettingsMenuOpen] = useState(false)
-  const [currentGroupForDialog, setCurrentGroupForDialog] = useState<WatchlistGroup | null>(null)
+  const [currentGroupForDialog, setCurrentGroupForDialog] = useState<WatchlistGroupBoard | null>(null)
   const sidebarSettingsMenuRef = useRef<HTMLDivElement>(null)
   const [newGroupName, setNewGroupName] = useState('')
   const [previewSymbol, setPreviewSymbol] = useState<string | null>(null)
@@ -665,7 +665,7 @@ export function WatchlistGroups() {
   // 设置查询（仅用于侧边栏/卡片视图切换和平均涨跌幅模式）
   const settingsQuery = useQuery({
     queryKey: ['watchlist-groups-settings'],
-    queryFn: () => api.watchlistGroups.getSettings(),
+    queryFn: () => api.watchlistGroupBoards.getSettings(),
     staleTime: Infinity,
   })
 
@@ -678,21 +678,21 @@ export function WatchlistGroups() {
 
   // 所有的 mutations 定义在前面
   const setSidebarOrCardsViewMutation = useMutation({
-    mutationFn: (mode: string) => api.watchlistGroups.setViewMode(mode),
+    mutationFn: (mode: string) => api.watchlistGroupBoards.setViewMode(mode),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-settings'] })
     },
   })
 
   const setAvgPctModeMutation = useMutation({
-    mutationFn: (mode: string) => api.watchlistGroups.setAvgPctMode(mode),
+    mutationFn: (mode: string) => api.watchlistGroupBoards.setAvgPctMode(mode),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-settings'] })
     },
   })
 
   const createMutation = useMutation({
-    mutationFn: (name: string) => api.watchlistGroups.create(name),
+    mutationFn: (name: string) => api.watchlistGroupBoards.create(name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
       toast('分组创建成功')
@@ -703,7 +703,7 @@ export function WatchlistGroups() {
   })
 
   const renameMutation = useMutation({
-    mutationFn: ({ groupId, name }: { groupId: string; name: string }) => api.watchlistGroups.rename(groupId, name),
+    mutationFn: ({ groupId, name }: { groupId: string; name: string }) => api.watchlistGroupBoards.rename(groupId, name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
       toast('分组重命名成功')
@@ -714,7 +714,7 @@ export function WatchlistGroups() {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: (groupId: string) => api.watchlistGroups.delete(groupId),
+    mutationFn: (groupId: string) => api.watchlistGroupBoards.delete(groupId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
       toast('分组删除成功')
@@ -729,7 +729,7 @@ export function WatchlistGroups() {
 
   const addItemMutation = useMutation({
     mutationFn: ({ groupId, symbol }: { groupId: string; symbol: string }) => 
-      api.watchlistGroups.addItem(groupId, symbol),
+      api.watchlistGroupBoards.addItem(groupId, symbol),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
       // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
@@ -747,7 +747,7 @@ export function WatchlistGroups() {
 
   const removeItemMutation = useMutation({
     mutationFn: ({ groupId, symbol }: { groupId: string; symbol: string }) => 
-      api.watchlistGroups.removeItem(groupId, symbol),
+      api.watchlistGroupBoards.removeItem(groupId, symbol),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
       // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
@@ -765,7 +765,7 @@ export function WatchlistGroups() {
 
   const moveItemToTopMutation = useMutation({
     mutationFn: ({ groupId, symbols }: { groupId: string; symbols: string[] }) =>
-      api.watchlistGroups.reorderItems(groupId, symbols),
+      api.watchlistGroupBoards.reorderItems(groupId, symbols),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
       // 使用前缀匹配失效所有 watchlist-groups-all-items 相关查询
@@ -782,7 +782,7 @@ export function WatchlistGroups() {
 
   const moveGroupToTopMutation = useMutation({
     mutationFn: (groupIds: string[]) =>
-      api.watchlistGroups.reorder(groupIds),
+      api.watchlistGroupBoards.reorder(groupIds),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
     },
@@ -790,7 +790,7 @@ export function WatchlistGroups() {
   })
 
   const exportConfigMutation = useMutation({
-    mutationFn: () => api.watchlistGroups.exportConfig(),
+    mutationFn: () => api.watchlistGroupBoards.exportConfig(),
     onSuccess: (data) => {
       // 触发文件下载
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -810,7 +810,7 @@ export function WatchlistGroups() {
 
   const importConfigMutation = useMutation({
     mutationFn: ({ data, replace }: { data: any; replace: boolean }) =>
-      api.watchlistGroups.importConfig(data, replace),
+      api.watchlistGroupBoards.importConfig(data, replace),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QK.watchlistGroups })
       queryClient.invalidateQueries({ queryKey: ['watchlist-groups-settings'] })
@@ -885,11 +885,11 @@ export function WatchlistGroups() {
   const handleCardRequestRemove = useCallback((sym: string) => setConfirmRemove(sym), [])
 
   // 数据查询
-  const groupsQuery = useQuery({ queryKey: QK.watchlistGroups, queryFn: api.watchlistGroups.list })
+  const groupsQuery = useQuery({ queryKey: QK.watchlistGroups, queryFn: api.watchlistGroupBoards.list })
 
   const selectedGroupItemsQuery = useQuery({
     queryKey: QK.watchlistGroupItemsEnriched(selectedGroupId || '', extColumnsParam),
-    queryFn: () => selectedGroupId ? api.watchlistGroups.listItemsEnriched(selectedGroupId, extColumnsParam) : null,
+    queryFn: () => selectedGroupId ? api.watchlistGroupBoards.listItemsEnriched(selectedGroupId, extColumnsParam) : null,
     enabled: !!selectedGroupId,
   })
 
@@ -987,7 +987,7 @@ export function WatchlistGroups() {
     queryKey: ['watchlist-groups-all-items', groupsQuery.data?.groups?.map(g => g.group_id).join(','), extColumnsParam],
     queryFn: async () => {
       if (!groupsQuery.data?.groups?.length) return { groups: {} }
-      return await api.watchlistGroups.listAllItemsEnriched(extColumnsParam)
+      return await api.watchlistGroupBoards.listAllItemsEnriched(extColumnsParam)
     },
     enabled: !!groupsQuery.data?.groups?.length,
     staleTime: 60_000,

@@ -37,7 +37,7 @@ export async function saveColumnConfig(columns: ColumnConfig[]): Promise<void> {
   storage.watchlistGroupsColumns.set(saveable)
   try {
     const { api } = await import('@/lib/api')
-    await api.watchlistGroups.updateColumns(saveable)
+    await api.watchlistGroupBoards.updateColumns(saveable)
   } catch {
     // 后端不可用时 localStorage 仍有效
   }
@@ -48,7 +48,7 @@ export async function loadColumnConfig(): Promise<ColumnConfig[]> {
   // 1. 尝试从后端加载
   try {
     const { api } = await import('@/lib/api')
-    const res = await api.watchlistGroups.getColumns()
+    const res = await api.watchlistGroupBoards.getColumns()
     if (res.columns && res.columns.length > 0) {
       const merged = mergeColumns(res.columns, BUILTIN_COLUMNS)
       // 同步到 localStorage

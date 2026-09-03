@@ -5,7 +5,7 @@
  */
 import { useState, useCallback, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, Palette, RotateCcw } from 'lucide-react'
+import { Settings2, Trash2, RefreshCw, Bell, Volume2, Info, Palette, RotateCcw, ExternalLink } from 'lucide-react'
 import { usePreferences, useVersion } from '@/lib/useSharedQueries'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -26,6 +26,7 @@ import {
   DEFAULT_BULL,
   DEFAULT_BEAR,
 } from '@/lib/priceColors'
+import { loadStockExternalTemplate, saveStockExternalTemplate } from '@/lib/stock-external-link'
 
 export function SettingsSystemPanel() {
   const qc = useQueryClient()
@@ -74,6 +75,7 @@ export function SettingsSystemPanel() {
   }, [priceColors])
 
   const screenerAutoRun = prefs?.screener_auto_run ?? true
+  const [extTpl, setExtTpl] = useState(() => loadStockExternalTemplate())
   const [clearing, setClearing] = useState(false)
   const [toastEnabled, setToastEnabled] = useState(() => {
     try { return localStorage.getItem('alert_toast_enabled') !== '0' } catch { return true }
@@ -415,6 +417,28 @@ export function SettingsSystemPanel() {
               </button>
             </div>
           </div>
+
+        <div className="flex items-center gap-2 mb-4">
+          <ExternalLink className="h-4 w-4 text-accent" />
+          <h3 className="text-sm font-medium text-foreground">个股详情外链</h3>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 py-2">
+          <div className="min-w-0">
+            <div className="text-sm text-foreground">详情页 URL 模板</div>
+            <div className="text-[11px] text-muted truncate">{"支持 {code} {market} {symbol} · 留空关闭外链"}</div>
+          </div>
+          <input
+            value={extTpl}
+            onChange={(e) => {
+              setExtTpl(e.target.value)
+              saveStockExternalTemplate(e.target.value)
+            }}
+            placeholder="https://..."
+            spellCheck={false}
+            className="w-[26rem] max-w-[60%] h-8 px-2.5 rounded-btn border border-border bg-base text-xs font-mono text-foreground focus:border-accent/50 focus:outline-none"
+          />
+        </div>
       </section>
 
       <section className="rounded-card border border-border bg-surface p-5 mt-6">
