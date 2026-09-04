@@ -113,16 +113,17 @@ function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; titl
 
 const cardCls = 'rounded-card border border-border bg-surface/80 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]'
 
-/** 取悬停索引对应的行, 越界或未悬停时取最后一行 */
-function pickRow<T>(rows: T[], hoverIndex: number | null): T | null {
-  if (rows.length === 0) return null
-  const idx = hoverIndex != null ? Math.min(hoverIndex, rows.length - 1) : rows.length - 1
-  return rows[idx] ?? null
+/** 取悬停时间标签对应的行, 未悬停或该侧缺失此标签时取最后一次采集的行 */
+function pickAlignedRow<T>(map: Map<string, T>, hoverLabel: string | null): T | null {
+  const hit = hoverLabel != null ? map.get(hoverLabel) : undefined
+  if (hit) return hit
+  const values = [...map.values()]
+  return values.length > 0 ? values[values.length - 1] : null
 }
 
 export function IntradayRegimeSentiment() {
   const qc = useQueryClient()
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+  const [hoverLabel, setHoverLabel] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const ct = useChartTheme()
 
@@ -163,8 +164,36 @@ export function IntradayRegimeSentiment() {
 
   const envRows: IntradayRegimeRow[] = envHistory.data?.data ?? []
   const sentRows: IntradaySentimentRow[] = sentHistory.data?.data ?? []
-  const envLatest = pickRow(envRows, hoverIndex)
-  const sentLatest = pickRow(sentRows, hoverIndex)
+
+  // 两个走势图的涨停纵轴共用同一最大值 (取两侧数据的最大涨停数, 向上取整到 10 的倍数),
+  // 避免各自自适应导致两图刻度不一致; 无数据时不指定, 交给 ECharts 自适应
+  const unifiedLimitUpMax = useMemo(() => {
+    let max = 0
+    for (const r of envRows) max = Math.max(max, r.limit_up)
+    for (const r of sentRows) max = Math.max(max, r.limit_up)
+    return max > 0 ? Math.ceil(max / 10) * 10 : undefined
+  }, [envRows, sentRows])
+
+  // 两条采集链路独立触发, 同一分钟可能各记多条或单侧缺失; 每侧按时间标签去重(保留最后
+  // 一次采集), x 轴取并集, 两图共享同一套类目 —— 按索引联动时两侧时间即对齐
+  const alignedTrend = useMemo(() => {
+    const envMap = new Map<string, IntradayRegimeRow>()
+    const sentMap = new Map<string, IntradaySentimentRow>()
+    const labelTs = new Map<string, number>()
+    const collect = <T extends { time: string; timestamp: number }>(rows: T[], map: Map<string, T>) => {
+      for (const r of rows) {
+        map.set(r.time, r)
+        labelTs.set(r.time, Math.max(labelTs.get(r.time) ?? 0, r.timestamp))
+      }
+    }
+    collect(envRows, envMap)
+    collect(sentRows, sentMap)
+    const labels = [...labelTs.entries()].sort((a, b) => a[1] - b[1]).map(([t]) => t)
+    return { labels, envMap, sentMap }
+  }, [envRows, sentRows])
+
+  const envLatest = pickAlignedRow(alignedTrend.envMap, hoverLabel)
+  const sentLatest = pickAlignedRow(alignedTrend.sentMap, hoverLabel)
 
   // 实时更新查询
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -193,34 +222,36 @@ export function IntradayRegimeSentiment() {
   // ── 环境综合分走势 ──
   const envTrendOption = useMemo<echarts.EChartsOption | null>(() => {
     if (envRows.length === 0) return null
-    const times = envRows.map(r => r.time)
-    const scores = envRows.map(r => r.score)
-    const limitUps = envRows.map(r => r.limit_up)
-    const profitScores = envRows.map(r => r.profit_score ?? null)
-    const speculationScores = envRows.map(r => r.speculation_score ?? null)
-    const resilienceScores = envRows.map(r => r.resilience_score ?? null)
-    const trendScores = envRows.map(r => r.trend_score ?? null)
+    const { labels: times, envMap } = alignedTrend
+    const envAt = (i: number) => envMap.get(times[i])
+    const scores = times.map((_, i) => envAt(i)?.score ?? null)
+    const limitUps = times.map((_, i) => envAt(i)?.limit_up ?? null)
+    const profitScores = times.map((_, i) => envAt(i)?.profit_score ?? null)
+    const speculationScores = times.map((_, i) => envAt(i)?.speculation_score ?? null)
+    const resilienceScores = times.map((_, i) => envAt(i)?.resilience_score ?? null)
+    const trendScores = times.map((_, i) => envAt(i)?.trend_score ?? null)
 
-    // 环境标签背景色带
+    // 环境标签背景色带 (按对齐后的类目轴, 该侧缺失的标签处断开)
     const stateBands: any[] = []
-    if (envRows.length > 0) {
-      let bandStartIdx = 0
-      let prevLabel = REGIME_STATE_LABELS[envRows[0].state]
-      for (let i = 1; i < envRows.length; i++) {
-        const currentLabel = REGIME_STATE_LABELS[envRows[i].state]
-        if (currentLabel !== prevLabel || i === envRows.length - 1) {
-          const bandEndIdx = i === envRows.length - 1 ? i : i - 1
-          if (prevLabel && REGIME_LABEL_COLORS[prevLabel]) {
-            stateBands.push([
-              { xAxis: bandStartIdx, itemStyle: { color: REGIME_LABEL_COLORS[prevLabel], opacity: 0.08 } },
-              { xAxis: bandEndIdx },
-            ])
-          }
-          bandStartIdx = i
-          prevLabel = currentLabel
-        }
+    let bandStartIdx = -1
+    let prevBandLabel: string | null = null
+    const pushBand = (endIdx: number) => {
+      if (prevBandLabel && REGIME_LABEL_COLORS[prevBandLabel] && bandStartIdx >= 0) {
+        stateBands.push([
+          { xAxis: bandStartIdx, itemStyle: { color: REGIME_LABEL_COLORS[prevBandLabel], opacity: 0.08 } },
+          { xAxis: endIdx },
+        ])
       }
     }
+    times.forEach((t, i) => {
+      const row = envMap.get(t)
+      const bandLabel = row ? REGIME_STATE_LABELS[row.state] : null
+      if (bandLabel && bandLabel === prevBandLabel) return
+      pushBand(i - 1)
+      bandStartIdx = row ? i : -1
+      prevBandLabel = bandLabel
+    })
+    pushBand(times.length - 1)
 
     const subLineStyle = { width: 1.2, type: 'dotted' as const, opacity: 0.8 }
 
@@ -235,13 +266,14 @@ export function IntradayRegimeSentiment() {
         enterable: true,
         formatter: (params: any) => {
           if (params && params.length > 0 && params[0].dataIndex != null) {
-            setHoverIndex(params[0].dataIndex)
+            setHoverLabel(times[params[0].dataIndex] ?? null)
           }
           if (!params || params.length === 0) return ''
           const idx = params[0].dataIndex
-          const row = envRows[idx]
-          const label = row ? REGIME_STATE_LABELS[row.state] : ''
-          let result = `<div style="font-weight: 600; margin-bottom: 8px;">${row?.date} ${row?.time}</div>`
+          const row = envMap.get(times[idx])
+          if (!row) return ''
+          const label = REGIME_STATE_LABELS[row.state]
+          let result = `<div style="font-weight: 600; margin-bottom: 8px;">${row.date} ${row.time}</div>`
           result += `<div style="margin-bottom: 4px;"><b>${label}</b> (${row?.score}分)</div>`
           params.forEach((param: any) => {
             if (param.seriesName && param.value != null) {
@@ -271,7 +303,7 @@ export function IntradayRegimeSentiment() {
         axisLine: { lineStyle: { color: ct.grid } },
       },
       yAxis: [
-        { type: 'value', name: '涨停', position: 'left', axisLabel: { color: ct.text, fontSize: 10 }, splitLine: { show: false }, nameTextStyle: { color: ct.text } },
+        { type: 'value', name: '涨停', min: 0, max: unifiedLimitUpMax, position: 'left', axisLabel: { color: ct.text, fontSize: 10 }, splitLine: { show: false }, nameTextStyle: { color: ct.text } },
         { type: 'value', name: '综合分', min: 0, max: 100, position: 'right', axisLabel: { color: ct.text, fontSize: 10 }, splitLine: { lineStyle: { color: ct.grid } }, nameTextStyle: { color: ct.text } },
       ],
       dataZoom: [
@@ -290,40 +322,43 @@ export function IntradayRegimeSentiment() {
         },
       ],
     }
-  }, [envRows, ct])
+  }, [envRows, alignedTrend, ct, unifiedLimitUpMax])
 
   // ── 情绪分时走势 ──
   const sentTrendOption = useMemo<echarts.EChartsOption | null>(() => {
     if (sentRows.length === 0) return null
-    const times = sentRows.map(r => r.time)
-    const scores = sentRows.map(r => r.emotion_score)
-    const limitUps = sentRows.map(r => r.limit_up)
-    const indexScore = sentRows.map(r => r.index_score ?? null)
-    const profitScore = sentRows.map(r => r.profit_score ?? null)
-    const moneyScore = sentRows.map(r => r.money_score ?? null)
-    const speculationScore = sentRows.map(r => r.speculation_score ?? null)
-    const resilienceScore = sentRows.map(r => r.resilience_score ?? null)
-    const mainlineScore = sentRows.map(r => r.mainline_score ?? null)
+    const { labels: times, sentMap } = alignedTrend
+    const sentAt = (i: number) => sentMap.get(times[i])
+    const scores = times.map((_, i) => sentAt(i)?.emotion_score ?? null)
+    const limitUps = times.map((_, i) => sentAt(i)?.limit_up ?? null)
+    const indexScore = times.map((_, i) => sentAt(i)?.index_score ?? null)
+    const profitScore = times.map((_, i) => sentAt(i)?.profit_score ?? null)
+    const moneyScore = times.map((_, i) => sentAt(i)?.money_score ?? null)
+    const speculationScore = times.map((_, i) => sentAt(i)?.speculation_score ?? null)
+    const resilienceScore = times.map((_, i) => sentAt(i)?.resilience_score ?? null)
+    const mainlineScore = times.map((_, i) => sentAt(i)?.mainline_score ?? null)
 
-    // 情绪标签背景色带
+    // 情绪标签背景色带 (按对齐后的类目轴, 该侧缺失的标签处断开)
     const stateBands: any[] = []
-    if (sentRows.length > 0) {
-      let bandStartIdx = 0
-      let prevLabel = sentRows[0].emotion_label
-      for (let i = 1; i < sentRows.length; i++) {
-        if (sentRows[i].emotion_label !== prevLabel || i === sentRows.length - 1) {
-          const bandEndIdx = i === sentRows.length - 1 ? i : i - 1
-          if (prevLabel && emotionLabelToColor(prevLabel)) {
-            stateBands.push([
-              { xAxis: bandStartIdx, itemStyle: { color: emotionLabelToColor(prevLabel), opacity: 0.08 } },
-              { xAxis: bandEndIdx },
-            ])
-          }
-          bandStartIdx = i
-          prevLabel = sentRows[i].emotion_label
-        }
+    let bandStartIdx = -1
+    let prevBandLabel: string | null = null
+    const pushBand = (endIdx: number) => {
+      if (prevBandLabel && emotionLabelToColor(prevBandLabel) && bandStartIdx >= 0) {
+        stateBands.push([
+          { xAxis: bandStartIdx, itemStyle: { color: emotionLabelToColor(prevBandLabel), opacity: 0.08 } },
+          { xAxis: endIdx },
+        ])
       }
     }
+    times.forEach((t, i) => {
+      const row = sentMap.get(t)
+      const bandLabel = row?.emotion_label ?? null
+      if (bandLabel && bandLabel === prevBandLabel) return
+      pushBand(i - 1)
+      bandStartIdx = row ? i : -1
+      prevBandLabel = bandLabel
+    })
+    pushBand(times.length - 1)
 
     const subLineStyle = { width: 1.2, type: 'dotted' as const, opacity: 0.8 }
 
@@ -338,13 +373,14 @@ export function IntradayRegimeSentiment() {
         enterable: true,
         formatter: (params: any) => {
           if (params && params.length > 0 && params[0].dataIndex != null) {
-            setHoverIndex(params[0].dataIndex)
+            setHoverLabel(times[params[0].dataIndex] ?? null)
           }
           if (!params || params.length === 0) return ''
           const idx = params[0].dataIndex
-          const row = sentRows[idx]
-          let result = `<div style="font-weight: 600; margin-bottom: 8px;">${row?.date} ${row?.time}</div>`
-          result += `<div style="margin-bottom: 4px;"><b>${row?.emotion_label}</b> (${row?.emotion_score}分)</div>`
+          const row = sentMap.get(times[idx])
+          if (!row) return ''
+          let result = `<div style="font-weight: 600; margin-bottom: 8px;">${row.date} ${row.time}</div>`
+          result += `<div style="margin-bottom: 4px;"><b>${row.emotion_label}</b> (${row.emotion_score}分)</div>`
           params.forEach((param: any) => {
             if (param.seriesName && param.value != null) {
               const marker = param.marker || '<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:' + param.color + ';"></span>'
@@ -370,7 +406,7 @@ export function IntradayRegimeSentiment() {
         axisLine: { lineStyle: { color: ct.grid } },
       },
       yAxis: [
-        { type: 'value', name: '涨停', position: 'left', axisLabel: { color: ct.text, fontSize: 10 }, splitLine: { show: false }, nameTextStyle: { color: ct.text } },
+        { type: 'value', name: '涨停', min: 0, max: unifiedLimitUpMax, position: 'left', axisLabel: { color: ct.text, fontSize: 10 }, splitLine: { show: false }, nameTextStyle: { color: ct.text } },
         { type: 'value', name: '情绪分', min: 0, max: 100, position: 'right', axisLabel: { color: ct.text, fontSize: 10 }, splitLine: { lineStyle: { color: ct.grid } }, nameTextStyle: { color: ct.text } },
       ],
       dataZoom: [
@@ -391,11 +427,11 @@ export function IntradayRegimeSentiment() {
         },
       ]
     }
-  }, [sentRows, ct])
+  }, [sentRows, alignedTrend, ct, unifiedLimitUpMax])
 
   const trendEvents = useMemo(() => ({
     'globalout': () => {
-      setHoverIndex(null)
+      setHoverLabel(null)
     }
   }), [])
 
@@ -432,6 +468,7 @@ export function IntradayRegimeSentiment() {
       },
       radar: {
         startAngle: 90,
+        radius: '65%',
         indicator: [
           { name: '赚钱', max: 100 },
           { name: '投机', max: 100 },
@@ -581,7 +618,7 @@ export function IntradayRegimeSentiment() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_3fr]">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className={cn(cardCls, 'p-3')}>
-              <SectionTitle icon={Activity} title={hoverIndex != null ? "选中时刻" : "最新环境雷达图"} hint={envLatest ? envLatest.time : ''} />
+              <SectionTitle icon={Activity} title={hoverLabel != null ? "选中时刻" : "最新环境雷达图"} hint={envLatest ? envLatest.time : ''} />
               <div ref={envRadarRef} className="mt-2 h-[300px]" />
             </div>
 
@@ -649,7 +686,7 @@ export function IntradayRegimeSentiment() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[2fr_3fr]">
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <div className={cn(cardCls, 'p-3')}>
-              <SectionTitle icon={Activity} title={hoverIndex != null ? "选中时刻" : "最新情绪雷达图"} hint={sentLatest ? sentLatest.time : ''} />
+              <SectionTitle icon={Activity} title={hoverLabel != null ? "选中时刻" : "最新情绪雷达图"} hint={sentLatest ? sentLatest.time : ''} />
               <div ref={sentRadarRef} className="mt-2 h-[300px]" />
             </div>
 
