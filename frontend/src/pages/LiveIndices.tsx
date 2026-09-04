@@ -93,6 +93,8 @@ function aggregateMinuteKlines(
   if (!minuteData || minuteData.length === 0) return [];
 
   // Helper function to parse time from datetime string - and EChartsIntraday保持一致
+  // 后端契约 (CONTRIBUTING §3.3): 分钟 datetime 为北京墙钟 naive, 直接取值;
+  // 不得 +8 偏移 (09:35 会变 17:35, 落不进任何聚合窗口 → 5分K+ 为空)
   function parseTime(dt: string): { h: number, m: number } {
     const match = dt.match(/(\d{2}):(\d{2})/);
     if (!match) {
@@ -100,9 +102,7 @@ function aggregateMinuteKlines(
       const parts = timeStr.split(':');
       return { h: parseInt(parts[0], 10), m: parseInt(parts[1], 10) };
     }
-    const h = (parseInt(match[1]) + 8) % 24;
-    const m = parseInt(match[2], 10);
-    return { h, m };
+    return { h: parseInt(match[1], 10), m: parseInt(match[2], 10) };
   }
 
   // Helper function to format time
@@ -257,7 +257,9 @@ function aggregateDailyKlines(
 
   for (let i = 0; i < sortedData.length; i++) {
     const row = sortedData[i];
-    const dt = new Date(row.date);
+    // date-only 字符串按 ES 规范被解析为 UTC 午夜, 西半球时区 getDate/getDay 会退一天,
+    // 导致周/月分桶错界。补 T00:00:00 强制按本地午夜解析, 日历日与字符串一致。
+    const dt = new Date(`${row.date}T00:00:00`);
 
     // Calculate window key
     let newWindowKey: string;

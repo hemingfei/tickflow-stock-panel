@@ -140,8 +140,14 @@ export const SSE_INVALIDATE_PREFIXES = [
   'watchlist-enriched',
   // 自选分组页 (WatchlistGroups) 的分组成分实时行情, 同样随行情 SSE 刷新
   'watchlist-group-items-enriched',
+  // 自选分组页卡片视图/侧栏平均涨跌幅的全量 enriched (['watchlist-groups-all-items', …]),
+  // 此前不在列表里导致该视图只有手动刷新才更新
+  'watchlist-groups-all-items',
   'quote-status',
   'index-quotes',
   'overview-market',
   'limit-ladder',
+  // 概念/行业分析、维度成员弹窗的全市场快照 (['market-snapshot']): 盘中随 enriched
+  // 变化, 此前只有 60s staleTime, 页面打开期间冻结。后端有 3s TTL 缓存兜成本。
+  'market-snapshot',
 ] as const
