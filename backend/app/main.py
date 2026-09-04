@@ -17,6 +17,7 @@ from app.api import (
     alerts,
     analysis,
     backtest,
+    board_snapshots,
     data,
     ext_data,
     financials,
@@ -184,6 +185,20 @@ async def _application_lifespan(app: FastAPI):
             logger.warning("board webhook push disabled: scheduler unavailable")
     except Exception as e:  # 推送不可用不影响主流程
         logger.warning("board webhook push init failed: %s", e)
+
+    # 看板快照落盘 (回溯): 开盘时段每 5 分钟构建一次看板快照并存为结构化 JSON,
+    # 供「看板回溯」页按日期+时间回放。与定时推送共用同一构建器 (依赖注入),
+    # 调度器不可用时落盘不可用, 只记警告不阻断启动。
+    try:
+        from app.services import board_snapshot_store
+        board_snapshot_store.set_snapshot_builder(build_board_snapshot)
+        if app.state.scheduler:
+            board_snapshot_store.register_record_job(app.state.scheduler, app.state)
+            logger.info("board snapshot record job registered")
+        else:
+            logger.warning("board snapshot record disabled: scheduler unavailable")
+    except Exception as e:  # 落盘不可用不影响主流程
+        logger.warning("board snapshot record init failed: %s", e)
 
     # depth sealed: 启动补跑(当天文件不存在) + 盘中轮询(有能力时)
     try:
@@ -472,8 +487,9 @@ app.add_middleware(
 #   1. 未设密码 + 本机/内网 → 放行(让本机用户访问面板 + 调 /api/auth/setup 设密码)
 #   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
-# 白名单: /api/auth/* (设密码/登录本身)、/health 等探活。
-_AUTH_WHITELIST_PREFIX = ("/api/auth/",)
+# 白名单: /api/auth/* (设密码/登录本身)、/health 等探活、
+# /api/public/replay/* (免登录看板回放独立页, 响应已剥离个人告警)。
+_AUTH_WHITELIST_PREFIX = ("/api/auth/", "/api/public/replay/")
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 
 
@@ -522,6 +538,8 @@ app.include_router(mining.router)
 app.include_router(intraday.router)
 app.include_router(indices.router)
 app.include_router(overview.router)
+app.include_router(board_snapshots.router)
+app.include_router(board_snapshots.public_router)
 app.include_router(abnormal.router)
 app.include_router(regime.router)
 app.include_router(sentiment.router)

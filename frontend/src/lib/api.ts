@@ -454,6 +454,29 @@ export interface OverviewMarket {
   industry_rank: { leading: OverviewDimensionRankItem[]; lagging: OverviewDimensionRankItem[] }
 }
 
+// ===== 看板快照回溯 =====
+// 结构与后端 app/api/overview.py build_board_snapshot (schema v2) 一致:
+// 单个 JSON 覆盖「市场看板」页面渲染所需的全部数据, 开盘时段每 5 分钟落盘
+// (backend/app/services/board_snapshot_store.py), 回溯页按日期+时刻取最近节点复现看板。
+export interface BoardSnapshot {
+  schema_version: number
+  generated_at: string
+  as_of: string | null
+  data_time: { realtime: boolean; text: string }
+  overview: OverviewMarket
+  alerts: { alerts: AlertEvent[]; total: number }
+  data_status: { enriched: Record<string, any>; daily: Record<string, any> }
+  capabilities: { label?: string; capabilities: Record<string, any> }
+  settings: { mode: string; onboarding_completed: boolean }
+}
+
+export interface BoardSnapshotLoadResult {
+  requested_date: string
+  requested_time: string | null
+  snapshot_time: string
+  snapshot: BoardSnapshot
+}
+
 // ===== 概念涨幅轮动矩阵 =====
 // dates: 日期字符串列表(最新在最前); columns: {日期: [[概念名, 涨幅小数], ...]} 每列各自降序
 export interface RpsRotationData {
@@ -2580,6 +2603,31 @@ export const api = {
   marketSnapshot: () =>
     request<{ as_of: string | null; rows: MarketSnapshotRow[] }>('/api/screener/market-snapshot'),
   overviewMarket: (asOf?: string) => request<OverviewMarket>(`/api/overview/market${asOf ? `?as_of=${asOf}` : ''}`),
+
+  // 看板快照回溯: 日期列表 / 单日时刻列表 / 最近节点快照
+  boardSnapshotDates: () => request<{ dates: string[] }>('/api/board-snapshots/dates'),
+  boardSnapshotTimes: (date: string) =>
+    request<{ date: string; times: string[] }>(`/api/board-snapshots/times?date=${encodeURIComponent(date)}`),
+  boardSnapshotLoad: (date?: string, time?: string) => {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    if (time) params.set('time', time)
+    const qs = params.toString()
+    return request<BoardSnapshotLoadResult>(`/api/board-snapshots/load${qs ? `?${qs}` : ''}`)
+  },
+
+  // 免登录公开回放 (独立 URL /replay): 同一快照存储, 认证白名单直放,
+  // 响应剥离监控中心告警 (含用户策略名/自选标的, 不对外)
+  publicReplayDates: () => request<{ dates: string[] }>('/api/public/replay/dates'),
+  publicReplayTimes: (date: string) =>
+    request<{ date: string; times: string[] }>(`/api/public/replay/times?date=${encodeURIComponent(date)}`),
+  publicReplayLoad: (date?: string, time?: string) => {
+    const params = new URLSearchParams()
+    if (date) params.set('date', date)
+    if (time) params.set('time', time)
+    const qs = params.toString()
+    return request<BoardSnapshotLoadResult>(`/api/public/replay/load${qs ? `?${qs}` : ''}`)
+  },
 
   // 概念涨幅轮动矩阵: 每列(日期)各自把所有概念按当天涨幅从高到低排序
   rpsRotation: (days: number, kind?: 'concept' | 'industry', level?: number) =>

@@ -41,6 +41,7 @@ import {
   Layers3,
   Landmark,
   RadioTower,
+  Rewind,
   CheckCircle2,
   BookOpenCheck,
   ChevronRight,
@@ -82,6 +83,7 @@ type CoreIndex = (typeof CORE_INDEXES)[number]
 
 const nav = [
   { to: '/',                label: '看板',     icon: LayoutDashboard },
+  { to: '/board-replay',   label: '看板回溯', icon: Rewind, badge: 'new' },
   { to: '/watchlist',  label: '自选',   icon: Star },
   { to: '/watchlist-groups',  label: '自选分组',   icon: Layers3 },
   { to: '/screener',   label: '策略',   icon: ScanSearch },

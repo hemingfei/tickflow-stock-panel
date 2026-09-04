@@ -20,6 +20,14 @@ export const QK = {
   quoteInterval:  ['quote-interval'] as const,
   webhookPushStatus: ['webhook-push-status'] as const,
   overviewMarket: (asOf?: string) => ['overview-market', asOf ?? 'latest'] as const,
+  // 看板快照回溯 (已落盘快照不可变, staleTime 由调用方放宽)
+  boardSnapshotDates: ['board-snapshot-dates'] as const,
+  boardSnapshotTimes: (date: string) => ['board-snapshot-times', date] as const,
+  boardSnapshotLoad: (date?: string, time?: string) => ['board-snapshot-load', date ?? '', time ?? ''] as const,
+  // 免登录公开回放 (/replay): 与站内回溯缓存隔离
+  publicReplayDates: ['public-replay-dates'] as const,
+  publicReplayTimes: (date: string) => ['public-replay-times', date] as const,
+  publicReplayLoad: (date?: string, time?: string) => ['public-replay-load', date ?? '', time ?? ''] as const,
   indexQuotes:    ['index-quotes'] as const,
 
   // Watchlist

@@ -24,6 +24,9 @@ const Financials = lazy(() => import('./pages/Financials').then(m => ({ default:
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
+const BoardReplay = lazy(() => import('./pages/BoardReplay').then(m => ({ default: m.BoardReplay })))
+// 免登录公开回放页: 无应用外壳, 与站内回溯共用组件 (后端剥离个人告警)
+const PublicBoardReplay = lazy(() => import('./pages/BoardReplay').then(m => ({ default: m.PublicBoardReplay })))
 const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ default: m.AnalysisDetail })))
 const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
 const IndustryAnalysis = lazy(() => import('./pages/IndustryAnalysis').then(m => ({ default: m.IndustryAnalysis })))
@@ -47,6 +50,8 @@ const CORE_ROUTE_PATHS = new Set([
   '/onboarding',
   '/login',
   '/overview',
+  '/board-replay',
+  '/replay',
   '/analysis',
   '/analysis/:menuId',
   '/concept-analysis',
@@ -117,6 +122,11 @@ export const router = createBrowserRouter([
   { path: '/onboarding', element: <Onboarding /> },
   { path: '/login', element: <Auth /> },
   {
+    // 免登录公开回放: 独立 URL, 不挂 OnboardingGuard/Layout, API 走认证白名单
+    path: '/replay',
+    element: <PublicBoardReplay />,
+  },
+  {
     path: '/',
     element: (
       <OnboardingGuard>
@@ -125,6 +135,7 @@ export const router = createBrowserRouter([
     ),
     children: [
       { index: true, element: <Dashboard /> },
+      { path: 'board-replay', element: <BoardReplay /> },
       { path: 'overview', element: <Navigate to="/" replace /> },
       { path: 'analysis', element: <Navigate to="/settings?tab=ext-pages" replace /> },
       { path: 'analysis/:menuId', element: <AnalysisDetail /> },
