@@ -142,6 +142,31 @@ def test_aggregate_daily_ma20_above():
     assert r1["above_ma20_pct"] == 0.5
 
 
+def test_aggregate_daily_fake_up_sealed_correction():
+    """fake_up 封板口径: 涨停数扣除假涨停, 封板率与投机维同步用修正值。
+
+    对齐实时情绪/看板: 3 摸板(其中 2 个五档未封住) + 1 炸板 →
+    扣除后 limit_up=1、seal_rate=1/2; 不传 fake_up 保持原始摸板口径。
+    """
+    df = pl.DataFrame({
+        "date": [date(2026, 1, 2)] * 5,
+        "symbol": ["A", "B", "C", "D", "E"],
+        "change_pct": [0.1, 0.1, 0.1, 0.05, -0.02],
+        "signal_limit_up": [True, True, True, False, False],
+        "signal_broken_limit_up": [False, False, False, True, False],
+    })
+    raw = regime_builder._aggregate_daily(df).row(0, named=True)
+    corr = regime_builder._aggregate_daily(df, fake_up=2).row(0, named=True)
+    assert raw["limit_up"] == 3
+    assert raw["seal_rate"] == pytest.approx(3 / 4)
+    assert corr["limit_up"] == 1
+    assert corr["seal_rate"] == pytest.approx(1 / 2)
+    # 炸板数不受修正影响(与情绪/看板口径一致)
+    assert raw["broken_limit"] == corr["broken_limit"] == 1
+    # 修正值进入投机维评分(涨停数是 speculation 的输入)
+    assert corr["speculation_score"] <= raw["speculation_score"]
+
+
 def test_aggregate_empty_returns_empty():
     assert regime_builder._aggregate_daily(pl.DataFrame()).is_empty()
 

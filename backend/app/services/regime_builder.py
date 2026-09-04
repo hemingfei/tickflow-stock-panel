@@ -145,11 +145,14 @@ def classify_state(metrics: dict) -> tuple[str, int]:
 
 # ───────────────────────── 批量聚合 ─────────────────────────
 
-def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.DataFrame:
+def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None,
+                     *, fake_up: int = 0) -> pl.DataFrame:
     """对多日多 symbol 的 enriched DataFrame 按 date 聚合环境指标。
 
     纯 polars 聚合, 不重算指标(假设 df 已含 signal_*/change_pct/ma20 等列)。
     index_pct_map: {date: 指数涨幅} 可选, 由调用方从指数数据预先算好。
+    fake_up: 假涨停家数(价格在涨停价但五档未封住), 由调用方从 depth 服务计算;
+    仅实时环境分钟链路传入以对齐情绪/看板封板口径, 日线批量路径不传保持原口径。
     梯队指标(首板/N板宽度/晋级率)由 market_phase 提供; phase 列不在此算
     (需要完整日序做平滑), 由 refresh_phase_labels 在 upsert 后统一重标。
     """
@@ -248,6 +251,9 @@ def _aggregate_daily(df: pl.DataFrame, index_pct_map: dict | None = None) -> pl.
         total = r.get("total_count", 0) or 0
         limit_up = r.get("limit_up", 0) or 0
         broken = r.get("broken_limit", 0) or 0
+        # 封板口径: 扣除假涨停后再算封板率和评分(与实时情绪/看板一致)
+        if fake_up:
+            limit_up = max(0, limit_up - fake_up)
         # MA20 上方占比: 来自向量化聚合 (None→0)
         valid_cnt = r.get("_valid_cnt") or 0
         above_cnt = r.get("_above_cnt") or 0

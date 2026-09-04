@@ -383,6 +383,7 @@ async def _application_lifespan(app: FastAPI):
         from app.services.intraday_regime import get_intraday_regime_service
         intraday_regime_service = get_intraday_regime_service()
         intraday_regime_service.set_repo(repo)
+        intraday_regime_service.set_depth_service(depth_service)
         app.state.intraday_regime_service = intraday_regime_service
         intraday_regime_service.start()
         logger.info("intraday regime service started")

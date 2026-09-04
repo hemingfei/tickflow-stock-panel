@@ -235,15 +235,9 @@ def _aggregate_single_day(repo, target_date: date, df_day: pl.DataFrame, index_p
     broken = sum(1 for r in rows if bool(r.get("signal_broken_limit_up")))
     max_boards = max([int(_finite(r.get("consecutive_limit_ups")) or 0) for r in rows], default=0)
 
-    # 五档 sealed 修正（与看板完全一致）
-    sealed_ready = False
-    fake_up = 0
-    if depth_service:
-        up_map = depth_service.get_sealed_map(target_date, is_down=False)
-        sealed_ready = bool(up_map) and depth_service.is_sealed_ready(target_date)
-        if up_map:
-            fake_up = sum(1 for v in up_map.values() if v.get("sealed") is False)
-    if sealed_ready:
+    # 五档 sealed 修正（与看板完全一致）: 未就绪时计数为 0, 不修正
+    fake_up = depth_service.fake_limit_count(target_date, is_down=False) if depth_service else 0
+    if fake_up:
         limit_up = max(0, limit_up - fake_up)
 
     # 计算 tier2_count（与看板完全一致：tiers_map 方式）

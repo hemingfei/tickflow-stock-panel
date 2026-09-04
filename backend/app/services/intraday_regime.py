@@ -140,7 +140,22 @@ def append_intraday_regime(data_dir: Path, record: dict[str, Any], target_date: 
     save_intraday_regime(data_dir, combined, target_date)
 
 
-def _compute_intraday_regime_impl(repo) -> dict[str, Any] | None:
+def _depth_fake_limit_up(depth_service, target_date: date) -> int:
+    """五档假涨停家数(价格在涨停价但未封住), 供涨停数对齐情绪/看板封板口径。
+
+    depth 不可用、未就绪或读取失败时返回 0(不修正), 与情绪链路的
+    sealed_ready=False 降级语义一致; 不让 depth 异常拖垮整条分钟记录。
+    """
+    if depth_service is None:
+        return 0
+    try:
+        return depth_service.fake_limit_count(target_date, is_down=False)
+    except Exception as e:
+        logger.warning("depth fake limit count failed: %s", e)
+        return 0
+
+
+def _compute_intraday_regime_impl(repo, depth_service=None) -> dict[str, Any] | None:
     """计算当前时刻的实时环境指标。"""
     try:
         now = cn_now()
@@ -202,7 +217,11 @@ def _compute_intraday_regime_impl(repo) -> dict[str, Any] | None:
             logger.warning("index pct load failed for intraday regime: %s", e)
         
         # 复用 regime_builder 的聚合逻辑
-        df_agg = regime_builder._aggregate_daily(df_today, index_pct_map)
+        # 涨停数统一封板口径(与实时情绪/看板一致): 扣除假涨停后再算封板率与评分
+        df_agg = regime_builder._aggregate_daily(
+            df_today, index_pct_map,
+            fake_up=_depth_fake_limit_up(depth_service, target_date),
+        )
         
         if df_agg.is_empty():
             return None
@@ -235,26 +254,30 @@ class IntradayRegimeService:
     def __init__(self):
         self._repo = None
         self._data_dir = None
+        self._depth_service = None
         self._running = False
         self._thread = None
         self._lock = threading.Lock()
         self._last_calculation_time = None
-    
+
     def set_repo(self, repo):
         self._repo = repo
         if repo:
             self._data_dir = repo.store.data_dir
-    
+
+    def set_depth_service(self, depth_service):
+        self._depth_service = depth_service
+
     def compute_now(self, force: bool = False) -> dict[str, Any] | None:
         """立即计算一次实时环境。"""
         if not self._repo or not self._data_dir:
             return None
-        
+
         # 检查是否在交易时段（除非强制）
         if not force and not is_trading_time():
             return None
-        
-        record = _compute_intraday_regime_impl(self._repo)
+
+        record = _compute_intraday_regime_impl(self._repo, self._depth_service)
         
         if record:
             append_intraday_regime(self._data_dir, record)

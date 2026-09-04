@@ -443,6 +443,17 @@ class DepthService:
         # 其他日期: 有 parquet 就 ready
         return self._persisted_for_date(target_date)
 
+    def fake_limit_count(self, target_date: date, is_down: bool = False) -> int:
+        """价格在涨(跌)停价但五档显示未封住的家数(假涨跌停)。
+
+        sealed 数据未就绪时返回 0, 调用方语义为"不修正"。实时环境/实时情绪
+        分钟链路统一用它扣除假涨停, 保证两条链路的涨停数与看板同口径。
+        """
+        m = self.get_sealed_map(target_date, is_down=is_down)
+        if not m or not self.is_sealed_ready(target_date):
+            return 0
+        return sum(1 for v in m.values() if v.get("sealed") is False)
+
     def get_sealed_age(self, target_date: date) -> float | None:
         """返回 sealed 数据 age(秒), 盘后定版为 None。"""
         if self._sealed_date and target_date == self._sealed_date and self._sealed_ready and self._sealed_fetched_ts:
