@@ -23,8 +23,10 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then npm config set registry "$NPM_REGISTRY";
     npm install -g pnpm@9
 # 让 pnpm 走镜像源安装依赖
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then pnpm config set registry "$NPM_REGISTRY"; fi
+# 先复制依赖文件，利用缓存
 COPY frontend/package.json frontend/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile || pnpm install
+# 再复制源代码
 COPY frontend/ ./
 RUN pnpm build
 
@@ -48,7 +50,7 @@ RUN if [ "$INCLUDE_STOCKSDK" = "1" ]; then \
     fi
 
 # === Stage 1c: Codex CLI ===
-# 固定版本保证镜像可复现；只复制安装产物到运行镜像，不保留 npm。
+# 固定版本保证镜像可复现；只复制安装产物到运行镜像,不保留 npm。
 FROM node:20-bookworm-slim AS codex-builder
 ARG USE_CN_MIRROR=1
 ARG NPM_REGISTRY=https://registry.npmmirror.com
@@ -92,7 +94,6 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     && rm -rf /var/lib/apt/lists/* \
     && tesseract --version
 
-    
 # 安装 uv(快) —— 国内镜像下三重兜底:主源 → 备用源 → 官方源,
 # 任一成功即可,避免单一镜像同步延迟/故障导致构建失败。
 # uv 发版极频繁,国内镜像同步存在时间窗口,不锁版本且无 fallback 时
@@ -105,7 +106,8 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
       pip install --no-cache-dir uv; \
     fi
 
-# Backend deps
+# Backend deps - 先复制依赖文件，利用 Docker 缓存
+# 这样只要 pyproject.toml 和 uv.lock 没变化，这一层就会被缓存
 COPY README.md ./README.md
 COPY backend/pyproject.toml backend/uv.lock* ./
 # Fix readme path in pyproject.toml for Docker build context
@@ -128,7 +130,7 @@ RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
     # 先尝试用 frozen lockfile，失败则不用（容忍锁文件轻微不匹配）
     uv sync --frozen "$@" || uv sync "$@"
 
-# Backend code
+# Backend code - 最后复制代码，这样代码变化不会导致依赖层重新构建
 # 注意:Docker 里 WORKDIR=/app, 而 config.py 的 _PROJECT_ROOT 是按开发布局
 # (<root>/backend/app/) 推导的, 容器内会错算到 /。这里用环境变量显式指定
 # 三个关键路径, 确保 static / tiers / data 都指向容器内正确位置。
