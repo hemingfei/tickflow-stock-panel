@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { api, type PriceLevel, type LevelType } from './api'
+import { cnTodayStr } from './format'
 
 /**
  * AI 个股分析 —— 全局任务/报告 store(与 aiReportStore 解耦、并行存在)。
@@ -148,12 +149,12 @@ export async function findLatestHistoryReport(symbol: string): Promise<HistoryRe
 
 /**
  * 查询某只股票【当日】是否已生成过分析报告(用于二次确认)。
- * 判断依据:created_at 的日期部分 == 本地今天。
+ * 判断依据:created_at (后端北京墙钟) 的日期部分 == 北京今天。
  * @returns 当天最近一条报告,或 null
  */
 export async function findTodayReport(symbol: string): Promise<HistoryReport | null> {
   if (!historyLoaded) await loadHistory()
-  const today = new Date().toISOString().slice(0, 10)  // YYYY-MM-DD
+  const today = cnTodayStr()
   return history.find(r => r.symbol === symbol && (r.created_at ?? '').slice(0, 10) === today) ?? null
 }
 

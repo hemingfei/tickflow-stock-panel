@@ -674,7 +674,8 @@ def get_minute_batch(request: Request, body: dict):
 
     # Step 1: 本地优先 — 一次 scan 读全部 symbol 当日分钟K (股票 / ETF 分钟数据分开存储)
     etf_set = repo.get_etf_symbol_set()
-    stock_syms = [s for s in symbols if s not in etf_set]
+    index_set = repo.get_index_symbol_set()
+    stock_syms = [s for s in symbols if s not in etf_set and s not in index_set]
     etf_syms = [s for s in symbols if s in etf_set]
     df_local = repo.get_minute_batch(stock_syms, trade_date)
     if etf_syms:
@@ -738,19 +739,21 @@ def get_minute_batch(request: Request, body: dict):
         full_minute_healthy = bool(svc is not None and svc.is_healthy())
     if full_minute_healthy:
         # 股票缺口不补拉, 本地有多少给多少 (服务下一轮写入补全);
-        # ETF 不在 universe 内, 维持补拉
+        # ETF 不在 universe 内, 指数无本地存储, 两者维持补拉
         for sym in [*full_pull, *stale_last]:
             if sym not in etf_set:
                 sub = local_parts.get(sym)
                 if sub is not None and not sub.is_empty():
                     result[sym] = sub.to_dicts()
-        full_pull = [s for s in full_pull if s in etf_set]
-        stale_last = {s: t for s, t in stale_last.items() if s in etf_set}
+        full_pull = [s for s in full_pull if s in etf_set or s in index_set]
+        stale_last = {s: t for s, t in stale_last.items() if s in etf_set or s in index_set}
 
     # Step 2: 补拉并落盘 (取到即写, upsert 语义; 下一轮命中本地, 请求量骤降)。
     # 落盘失败只降级 (log 后继续返回本轮数据), 不影响响应 —— 持久化是优化而非正确性前提。
-    # 契约: 本端点只接受 stock/ETF (指数分钟K走 /api/index/minute 独立路径),
-    # 按 asset_type 拆分调用 (自定义源 / TickFlow 路由均依赖 asset_type 正确传递)。
+    # 契约: 本端点接受 stock/ETF/index。指数分钟K无本地存储 (落盘会污染股票分钟表,
+    # 与 sync_minute 的 universe 剔除同一隔离契约), 走 asset_type="index" 实时拉取
+    # 且只返回不落盘; 按 asset_type 拆分调用 (自定义源 / TickFlow 路由均依赖 asset_type
+    # 正确传递)。
     day_start = datetime(trade_date.year, trade_date.month, trade_date.day, 9, 25, 0)
     session_end = datetime(trade_date.year, trade_date.month, trade_date.day, 15, 5, 0)
     lim = capset.limits(Cap.KLINE_MINUTE_BATCH)
@@ -775,8 +778,9 @@ def get_minute_batch(request: Request, body: dict):
             return
         try:
             # 读-改-写必须持仓库写锁 (与全量分钟服务/盘后同步同一纪律, Windows 临时文件占用)。
-            # 仅在拿到真实目录时落盘: data_dir 异常 (非 Path) 时跳过, 只返回本轮数据。
-            minute_dir = minute_dirs[asset]
+            # 仅在拿到真实目录时落盘: data_dir 异常 (非 Path) 或指数 (无本地存储) 时跳过,
+            # 只返回本轮数据。
+            minute_dir = minute_dirs.get(asset)
             if isinstance(minute_dir, Path):
                 with repo._write_lock:
                     kline_sync._write_minute_partition(df_live, minute_dir)
@@ -785,14 +789,15 @@ def get_minute_batch(request: Request, body: dict):
         for part in df_live.partition_by("symbol", maintain_order=True):
             live_map[part["symbol"][0]] = part.sort("datetime")
 
-    _pull("stock", [s for s in full_pull if s not in etf_set], day_start)
+    _pull("stock", [s for s in full_pull if s not in etf_set and s not in index_set], day_start)
     _pull("etf", [s for s in full_pull if s in etf_set], day_start)
+    _pull("index", [s for s in full_pull if s in index_set], day_start)
     if stale_last:
         # 增量公共起点 = 最旧的最后一根本身: 最后一根是形成中的动态K (分钟内
         # 收盘/量/额持续变化), 必须重拉并以定版值覆盖; 重叠由 upsert/合并去重吸收
         inc_start = min(stale_last.values())
         if inc_start < session_end:
-            _pull("stock", [s for s in stale_last if s not in etf_set], inc_start)
+            _pull("stock", [s for s in stale_last if s not in etf_set and s not in index_set], inc_start)
             _pull("etf", [s for s in stale_last if s in etf_set], inc_start)
 
     # 合并: 有增量/回填的 symbol = 本地 + 拉取 upsert; 仅拉到的 (missing) 直接进结果

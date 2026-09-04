@@ -5,6 +5,7 @@ import { Activity, Loader2, Lock, RefreshCw } from 'lucide-react'
 import { api, type IndexInstrument, type KlineRow, type MinuteKlineRow } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { useCapabilities } from '@/lib/useSharedQueries'
+import { cnTodayStr } from '@/lib/format'
 import { EChartsCandlestick, type OHLC } from '@/components/EChartsCandlestick'
 import { EChartsIntraday } from '@/components/EChartsIntraday'
 
@@ -107,6 +108,8 @@ export function Indices() {
     queryKey: QK.indexMinute(selectedSymbol, selectedDate ?? ''),
     queryFn: () => api.indexMinute(selectedSymbol, selectedDate ?? undefined),
     enabled: !!selectedSymbol && !!selectedDate && hasMinuteCap,
+    // 选中"今天"(自动选中的最新日K)时分时曲线随盘推进, 30s 轮询; 历史日期静态不刷
+    refetchInterval: selectedDate === cnTodayStr() ? 30_000 : false,
     placeholderData: (prev) => prev,
   })
 

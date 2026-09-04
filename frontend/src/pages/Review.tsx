@@ -18,7 +18,7 @@ import {
 import { api, type OverviewMarket, type AiReviewReport, type DragonTigerStockItem } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { cn } from '@/lib/cn'
-import { fmtPct, fmtVolume, priceColorClass } from '@/lib/format'
+import { fmtPct, fmtVolume, priceColorClass, cnTodayStr } from '@/lib/format'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { boardTag } from '@/components/stock-table/primitives'
 import { fmtBigNum } from '@/lib/format'
@@ -162,7 +162,8 @@ export function Review() {
 
   // 自动归档(生成完成后台静默保存)—— 通过回调注入 store,避免 store 直接依赖 qc/marketQuery
   const onGenerationDone = useCallback(async (fullContent: string, doneMeta: { as_of?: string; summary?: string; emotion_score?: number; emotion_label?: string } | null) => {
-    const reportAsOf = doneMeta?.as_of ?? marketQuery.data?.as_of ?? asOf ?? new Date().toISOString().slice(0, 10)
+    // as_of 是北京交易日: 兜底用北京今天, toISOString 的 UTC 日期在东八区凌晨会退一天
+    const reportAsOf = doneMeta?.as_of ?? marketQuery.data?.as_of ?? asOf ?? cnTodayStr()
     try {
       await api.reviewReportSave({
         as_of: reportAsOf,

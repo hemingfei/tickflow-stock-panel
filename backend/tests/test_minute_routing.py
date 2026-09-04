@@ -293,6 +293,7 @@ def test_get_minute_batch_splits_stock_and_etf(monkeypatch):
     # mock repo: ETF 集合含 510300.SH; 本地分钟K返回空 (强制走 incomplete 补拉)
     mock_repo = MagicMock()
     mock_repo.get_etf_symbol_set.return_value = {"510300.SH"}
+    mock_repo.get_index_symbol_set.return_value = set()
     mock_repo.get_minute_batch.return_value = pl.DataFrame()
 
     # mock capset: 有权限, limits 返回 None (lim.batch 访问被 `if lim else` 守护)
@@ -347,6 +348,7 @@ def _endpoint_mocks(monkeypatch, local_df: pl.DataFrame, sync_ret: pl.DataFrame 
 
     mock_repo = MagicMock()
     mock_repo.get_etf_symbol_set.return_value = set()
+    mock_repo.get_index_symbol_set.return_value = set()
     mock_repo.get_minute_batch.return_value = local_df
     mock_repo._write_lock = Lock()
     # 真实 Path 才会触发落盘分支 (kline.py 的 isinstance 守卫)
@@ -900,6 +902,7 @@ def test_get_minute_batch_prefer_local_healthy_skips_stock_refetch(monkeypatch):
 
     mock_repo = MagicMock()
     mock_repo.get_etf_symbol_set.return_value = {"510300.SH"}
+    mock_repo.get_index_symbol_set.return_value = set()
     # 股票本地 100 根 (expected=240 → <90% 判 incomplete), ETF 本地空
     mock_repo.get_minute_batch.side_effect = (
         lambda syms, d, asset_type="stock":
@@ -936,6 +939,7 @@ def test_get_minute_batch_prefer_local_unhealthy_falls_back(monkeypatch):
 
     mock_repo = MagicMock()
     mock_repo.get_etf_symbol_set.return_value = set()
+    mock_repo.get_index_symbol_set.return_value = set()
     mock_repo.get_minute_batch.return_value = _mock_minute_rows("600519.SH", 100)
 
     mock_capset = MagicMock()
@@ -964,6 +968,7 @@ def test_get_minute_batch_no_flag_unaffected_even_if_healthy(monkeypatch):
 
     mock_repo = MagicMock()
     mock_repo.get_etf_symbol_set.return_value = set()
+    mock_repo.get_index_symbol_set.return_value = set()
     mock_repo.get_minute_batch.return_value = _mock_minute_rows("600519.SH", 100)
 
     mock_capset = MagicMock()
@@ -1038,6 +1043,7 @@ def _compress_mock_env(monkeypatch, *, compress_on, accept="gzip, deflate"):
 
     mock_repo = MagicMock()
     mock_repo.get_etf_symbol_set.return_value = set()
+    mock_repo.get_index_symbol_set.return_value = set()
     mock_repo.get_minute_batch.return_value = _mock_minute_rows("600519.SH", 100)
 
     mock_capset = MagicMock()
@@ -1181,3 +1187,97 @@ def test_preferences_parallel_saves_do_not_lose_each_other(tmp_path, monkeypatch
     final = prefs.load()
     assert final["minute_batch_compress"] is False
     assert final["daily_batch_compress"] is False
+
+
+# ---------- 测试: minute-batch 指数隔离 (只实时返回, 不落盘股票分钟表) ----------
+
+def test_minute_batch_index_pulled_via_index_path_without_persist(monkeypatch):
+    """指数 symbol 不得落入 stock 分支补拉 (会污染 kline_minute), 也不落盘;
+    以 asset_type="index" 实时拉取并正常返回。回归: LiveIndices 每 5s 用
+    指数 symbol 调 minute-batch, 此前会把指数分钟写进股票分钟表。"""
+    from app.api import kline as kline_api
+
+    idx_bars = _bars("000001.SH", [datetime(2026, 1, 15, 9, 31), datetime(2026, 1, 15, 9, 32)])
+
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+        if asset_type == "index":
+            return idx_bars
+        return pl.DataFrame()
+    sync_spy = MagicMock(side_effect=fake_sync)
+    monkeypatch.setattr(kline_api.kline_sync, "sync_minute_batch", sync_spy)
+
+    writes: list[pl.DataFrame] = []
+    monkeypatch.setattr(kline_api.kline_sync, "_write_minute_partition",
+                        lambda df, d: writes.append(df))
+
+    mock_repo = MagicMock()
+    mock_repo.get_etf_symbol_set.return_value = set()
+    mock_repo.get_index_symbol_set.return_value = {"000001.SH"}
+    mock_repo.get_minute_batch.return_value = pl.DataFrame()   # 指数无本地存储
+    mock_repo._write_lock = Lock()
+    mock_repo.store.data_dir = Path("data")
+
+    mock_capset = MagicMock()
+    mock_capset.has.return_value = True
+    mock_capset.limits.return_value = None
+
+    mock_request = MagicMock()
+    mock_request.app.state.repo = mock_repo
+    mock_request.app.state.capabilities = mock_capset
+
+    result = kline_api.get_minute_batch(
+        mock_request, {"symbols": ["000001.SH"], "date": "2026-01-15"},
+    )
+
+    # 指数走 index 路径补拉 (而非 stock)
+    assert sync_spy.call_count == 1
+    call = sync_spy.call_args
+    assert call.kwargs.get("asset_type") == "index"
+    assert list(call.args[0]) == ["000001.SH"]
+    # 指数分钟不落盘 (防污染股票分钟表)
+    assert writes == []
+    # 数据照常返回
+    assert len(result["data"]["000001.SH"]) == 2
+
+
+def test_minute_batch_mixed_assets_split_correctly(monkeypatch):
+    """stock/ETF/指数混批: 三路各自以正确 asset_type 补拉, 指数不落盘。"""
+    from app.api import kline as kline_api
+
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+        symbol_map = {"stock": "600519.SH", "etf": "510300.SH", "index": "000001.SH"}
+        return _bars(symbol_map[asset_type], [datetime(2026, 1, 15, 9, 31)])
+    sync_spy = MagicMock(side_effect=fake_sync)
+    monkeypatch.setattr(kline_api.kline_sync, "sync_minute_batch", sync_spy)
+
+    writes: list[pl.DataFrame] = []
+    monkeypatch.setattr(kline_api.kline_sync, "_write_minute_partition",
+                        lambda df, d: writes.append(df))
+
+    mock_repo = MagicMock()
+    mock_repo.get_etf_symbol_set.return_value = {"510300.SH"}
+    mock_repo.get_index_symbol_set.return_value = {"000001.SH"}
+    mock_repo.get_minute_batch.return_value = pl.DataFrame()
+    mock_repo._write_lock = Lock()
+    mock_repo.store.data_dir = Path("data")
+
+    mock_capset = MagicMock()
+    mock_capset.has.return_value = True
+    mock_capset.limits.return_value = None
+
+    mock_request = MagicMock()
+    mock_request.app.state.repo = mock_repo
+    mock_request.app.state.capabilities = mock_capset
+
+    result = kline_api.get_minute_batch(
+        mock_request,
+        {"symbols": ["600519.SH", "510300.SH", "000001.SH"], "date": "2026-01-15"},
+    )
+
+    assets = sorted(c.kwargs.get("asset_type") for c in sync_spy.call_args_list)
+    assert assets == ["etf", "index", "stock"]
+    # 只有 stock + ETF 两路落盘 (指数不落盘)
+    written_syms = {part["symbol"][0] for df in writes for part in df.partition_by("symbol")}
+    assert written_syms == {"600519.SH", "510300.SH"}
+    # 三个 symbol 都有数据返回
+    assert set(result["data"].keys()) == {"600519.SH", "510300.SH", "000001.SH"}

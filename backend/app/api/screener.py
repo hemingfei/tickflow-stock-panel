@@ -462,10 +462,23 @@ def get_cached_result(
     }
 
 
+# market-snapshot 快照缓存: SSE 行情推送会把 'market-snapshot' 前缀加入前端
+# 周期失效, 多页/多端同拍重取时全帧 to_dicts 重复计算。TTL 3s < 默认轮询间隔
+# (6s), 每轮 SSE 重取仍拿最新 enriched; 元组整体赋值 = 原子替换, 无锁安全。
+_SNAPSHOT_TTL_S = 3.0
+_snapshot_cache: tuple[float, str, list[dict]] | None = None   # (monotonic, as_of, rows)
+
+
 @router.get("/market-snapshot")
 def market_snapshot(request: Request):
     """最新全市场轻量行情快照，供板块/概念聚合分析使用。"""
+    global _snapshot_cache
     import polars as pl
+
+    now_mono = time.monotonic()
+    cached = _snapshot_cache
+    if cached is not None and (now_mono - cached[0]) < _SNAPSHOT_TTL_S:
+        return {"as_of": cached[1], "rows": cached[2]}
 
     repo = request.app.state.repo
     svc = ScreenerService(repo)
@@ -494,7 +507,9 @@ def market_snapshot(request: Request):
             if isinstance(v, float) and not math.isfinite(v):
                 r[k] = None
 
-    return {"as_of": str(as_of), "rows": rows}
+    as_of_str = str(as_of)
+    _snapshot_cache = (now_mono, as_of_str, rows)
+    return {"as_of": as_of_str, "rows": rows}
 
 
 @router.post("/run_all")

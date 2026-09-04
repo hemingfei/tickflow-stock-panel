@@ -896,16 +896,19 @@ export function Watchlist() {
     const liveRows = enriched.data?.rows
     if (!intradayVisible || !liveRows?.length) return base
     const liveBySymbol = new Map<string, any>(liveRows.map((r: any) => [r.symbol, r]))
-    // 仅连续竞价时段续画 (9:31-11:30, 13:01-15:00); 收盘后 rt_price 即收盘价无需续写
-    const now = new Date()
-    const hh = now.getHours(), mm = now.getMinutes()
+    // 仅连续竞价时段续画 (9:31-11:30, 13:01-15:00); 收盘后 rt_price 即收盘价无需续写。
+    // 15:00 是收盘集合竞价定版K, 也要续写。
+    const now = new Date(Date.now() + 8 * 3_600_000)   // 北京墙钟 (本地钟 +8h, 读 UTC 分量)
+    const hh = now.getUTCHours(), mm = now.getUTCMinutes()
     const inSession =
       (hh === 9 && mm >= 31) || hh === 10 ||
-      (hh === 11 && mm <= 30) || (hh === 13 && mm >= 1) || hh === 14
+      (hh === 11 && mm <= 30) || (hh === 13 && mm >= 1) || hh === 14 ||
+      (hh === 15 && mm === 0)
     if (!inSession) return base
-    // 与服务端同构的 naive 北京时间戳 (手工拼本地时间, 不能用 toISOString — 那是 UTC)
+    // 与服务端同构的 naive 北京时间戳 (手工拼北京钟, 不能用 toISOString — 那是 UTC)。
+    // 分钟K的 datetime 是北京墙钟, 用户跨时区时本地钟会拼出未来K或静默失效。
     const pad = (n: number) => String(n).padStart(2, '0')
-    const barTs = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(hh)}:${pad(mm)}:00`
+    const barTs = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}T${pad(hh)}:${pad(mm)}:00`
     const patched: Record<string, MinuteKlineRow[]> = {}
     for (const sym of Object.keys(base)) {
       const arr = base[sym]

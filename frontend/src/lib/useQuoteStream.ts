@@ -2,10 +2,21 @@ import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { SSE_INVALIDATE_PREFIXES, QK } from './queryKeys'
 import { getQueryConfig } from './useQueryConfig'
+import { cnTodayStr } from './format'
 import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
 import { feedReviewEvent } from './reviewStore'
 import type { StrategyAlertEvent } from './api'
+
+// 历史日期查询不随行情 SSE 失效: 历史聚合不会变, 每 tick 重取纯属浪费
+// (limit-ladder 历史日期后端还会走 parquet 慢路径全量重算)。
+// key 形态: ['overview-market', asOf] / ['limit-ladder', asOf, …]; 'latest'/''/缺失 = 今日。
+function _isHistoricalDated(queryKey: readonly unknown[]): boolean {
+  const first = String(queryKey[0])
+  if (first !== 'overview-market' && first !== 'limit-ladder') return false
+  const asOf = queryKey[1]
+  return typeof asOf === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(asOf) && asOf !== cnTodayStr()
+}
 
 // ===== 全局 SSE 连接状态 (模块级 store, 仿 AlertToast.tsx 模式) =====
 // 实时行情 SSE 断开时 UI 无感知 → 会漏掉策略告警。这里暴露连接状态,
@@ -148,6 +159,7 @@ export function useQuoteStream(
           })
           qc.invalidateQueries({
             predicate: (query) =>
+              !_isHistoricalDated(query.queryKey) &&
               activePrefixes.some(
                 (prefix) => String(query.queryKey[0]).startsWith(prefix),
               ),
@@ -156,6 +168,7 @@ export function useQuoteStream(
           // 无配置时全部刷新 (向后兼容)
           qc.invalidateQueries({
             predicate: (query) =>
+              !_isHistoricalDated(query.queryKey) &&
               SSE_INVALIDATE_PREFIXES.some(
                 (prefix) => String(query.queryKey[0]).startsWith(prefix),
               ),

@@ -8,7 +8,7 @@ import { StockPreviewDialog, toNavItems, type NavItem } from '@/components/Stock
 import { DimensionMembersDialog, type DimensionKind, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
-import { fmtPct, priceColorClass } from '@/lib/format'
+import { fmtPct, priceColorClass, cnTodayStr } from '@/lib/format'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
 import { useTheme } from '@/lib/theme'
@@ -1585,7 +1585,7 @@ export function LimitUpLadder() {
     )
   }
 
-  const dateValue = displayDate || new Date().toISOString().slice(0, 10)
+  const dateValue = displayDate || cnTodayStr()
 
   if (!data || rawTiers.length === 0) {
     return (

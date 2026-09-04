@@ -129,11 +129,14 @@ export function StockPreviewDialog({ symbol, name, onClose, triggerInfo, navList
     queryFn: api.monitorRulesList,
     enabled: !!symbol,
   })
-  // 异动边缘: 与异动页同 queryKey 共享缓存; 该股处于观察/边缘/触发状态时在图表上方显示信息条
+  // 异动边缘: 与异动页同 queryKey 共享缓存; 该股处于观察/边缘/触发状态时在图表上方显示信息条。
+  // 弹窗打开时 60s 轮询兜底 — 不进 SSE 前缀 (后端全市场快照构建较重, 不随行情 tick 刷);
+  // 从异动页打开时本就共享其 60s 轮询, 此处覆盖从其他页面打开的场景。
   const abnormal = useQuery({
     queryKey: QK.abnormalOverview(0.5, 300),
     queryFn: () => api.abnormalOverview(0.5, 300),
     enabled: !!symbol,
+    refetchInterval: 60_000,
   })
   const abRow = symbol
     ? abnormal.data?.rows.find(r => r.symbol === symbol)

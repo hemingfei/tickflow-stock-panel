@@ -83,6 +83,16 @@ export function formatLogTime(iso: string): string {
 }
 
 /**
+ * 北京时区今天 (YYYY-MM-DD)。
+ * 后端契约统一北京墙钟 (CONTRIBUTING §3.3): 与 created_at/as_of 等 naive 北京
+ * 日期比较时必须用它, 不能用 toISOString().slice(0,10) (UTC 日期, 东八区
+ * 00:00-07:59 会退一天) 也不能用本地日期 (跨时区错位)。本地钟 +8h 后取 UTC 日期。
+ */
+export function cnTodayStr(): string {
+  return new Date(Date.now() + 8 * 3_600_000).toISOString().slice(0, 10)
+}
+
+/**
  * 扩展数据列数字格式化 — 千分位逗号 + 单位换算 + 小数位。
  * 供自选/策略列表的扩展数据 number 单元格统一调用。
  *
