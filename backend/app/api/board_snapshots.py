@@ -3,8 +3,10 @@
 提供两组路由:
   - /api/board-snapshots/*  站内「看板回溯」页使用, 走登录认证;
   - /api/public/replay/*    免登录独立回放页使用 (认证中间件白名单),
-                            响应剥离监控中心告警 — 告警含用户策略名与
-                            自选标的, 不对外泄露; 行情数据保持完整。
+                            响应剥离监控中心告警 (含用户策略名与自选
+                            标的) 及与回放渲染无关的服务器私有状态块
+                            (settings/data_status/数据源档位名), 行情
+                            数据保持完整。
 """
 from __future__ import annotations
 
@@ -17,9 +19,22 @@ public_router = APIRouter(prefix="/api/public/replay", tags=["overview"])
 
 
 def _strip_private(snapshot: dict) -> dict:
-    """公开响应剥离个人信息块 (只替换 alerts 键, 不改动快照其余内容)。"""
+    """公开响应剥离个人信息与服务器私有状态块 (只替换/删除键, 不改动其余内容)。
+
+    - alerts: 触发记录含用户策略名与自选标的;
+    - settings / data_status: 服务器主人的配置状态与本地库规模, 与回放无关;
+    - capabilities.label: 数据源档位名 (能力层中立, 不对匿名暴露)。
+    capabilities.capabilities 保留 — 回放页封板徽标降级口径需要 depth5.batch。
+    """
     public = dict(snapshot)
     public["alerts"] = {"alerts": [], "total": 0}
+    public.pop("settings", None)
+    public.pop("data_status", None)
+    caps = public.get("capabilities")
+    if isinstance(caps, dict):
+        caps = dict(caps)
+        caps.pop("label", None)
+        public["capabilities"] = caps
     return public
 
 

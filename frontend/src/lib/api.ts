@@ -458,6 +458,8 @@ export interface OverviewMarket {
 // 结构与后端 app/api/overview.py build_board_snapshot (schema v2) 一致:
 // 单个 JSON 覆盖「市场看板」页面渲染所需的全部数据, 开盘时段每 5 分钟落盘
 // (backend/app/services/board_snapshot_store.py), 回溯页按日期+时刻取最近节点复现看板。
+// data_status/settings/capabilities.label 仅站内端点返回; 公开端点
+// (/api/public/replay/*) 由后端剥离这些服务器私有状态块, 故为可选。
 export interface BoardSnapshot {
   schema_version: number
   generated_at: string
@@ -465,9 +467,9 @@ export interface BoardSnapshot {
   data_time: { realtime: boolean; text: string }
   overview: OverviewMarket
   alerts: { alerts: AlertEvent[]; total: number }
-  data_status: { enriched: Record<string, any>; daily: Record<string, any> }
+  data_status?: { enriched: Record<string, any>; daily: Record<string, any> }
   capabilities: { label?: string; capabilities: Record<string, any> }
-  settings: { mode: string; onboarding_completed: boolean }
+  settings?: { mode: string; onboarding_completed: boolean }
 }
 
 export interface BoardSnapshotLoadResult {

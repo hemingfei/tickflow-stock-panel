@@ -641,6 +641,7 @@ export function BoardContent({
   data, alerts, hasDepth, sealedReady,
   activeSource, activeSymbol,
   onStockClick, onAlertClick, onDimensionClick,
+  showMonitor = true,
 }: {
   data: OverviewMarket
   /** 监控中心触发记录: 实时页传轮询结果, 回溯页传快照定格列表 */
@@ -654,6 +655,8 @@ export function BoardContent({
   onStockClick?: (source: BoardSource, symbol: string, name?: string, navList?: NavItem[]) => void
   onAlertClick?: (event: AlertEvent, navList?: NavItem[]) => void
   onDimensionClick?: (target: DimensionMembersTarget) => void
+  /** 公开回放隐藏监控中心板块: 告警已被后端剥离, 空板块会被误读为「当时无告警」 */
+  showMonitor?: boolean
 }) {
   // 实时模式: none / watchlist / full_market。
   // watchlist 模式仅自选 ≤5 只实时, 看板呈现的大盘数据实为盘后快照, 需提示避免误读。
@@ -762,23 +765,25 @@ export function BoardContent({
             <SectionTitle icon={Flame} title="涨停梯队" hint={<span className="inline-flex items-center gap-1">{`涨停 ${data.limit.limit_up}`}{(!hasDepth || !sealedReady) && <span className="text-[9px] px-1 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-500">{hasDepth ? '未修正' : '降级'}</span>}</span>} />
             <LadderMini limit={data.limit} />
           </section>
-          <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <BellRing className="h-3.5 w-3.5 text-accent" />
-                <h2 className="text-xs font-semibold text-foreground">监控中心</h2>
-                <span className="font-mono text-[10px] text-muted">实时信号</span>
+          {showMonitor && (
+            <section className="rounded-card border border-border bg-surface/80 p-1.5 shadow-[0_1px_2px_hsl(var(--border)/0.4)] backdrop-blur-sm transition-shadow hover:shadow-[0_2px_8px_hsl(var(--border)/0.5)]">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <BellRing className="h-3.5 w-3.5 text-accent" />
+                  <h2 className="text-xs font-semibold text-foreground">监控中心</h2>
+                  <span className="font-mono text-[10px] text-muted">实时信号</span>
+                </div>
+                <Link to="/monitor" className="inline-flex items-center justify-center h-5 w-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors" title="进入监控中心">
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
               </div>
-              <Link to="/monitor" className="inline-flex items-center justify-center h-5 w-5 rounded text-muted hover:text-accent hover:bg-accent/10 transition-colors" title="进入监控中心">
-                <ArrowUpRight className="h-3.5 w-3.5" />
-              </Link>
-            </div>
-            <MonitorWidget
-              events={alerts}
-              activeSymbol={activeSource === 'alert' ? activeSymbol : undefined}
-              onStockClick={onAlertClick}
-            />
-          </section>
+              <MonitorWidget
+                events={alerts}
+                activeSymbol={activeSource === 'alert' ? activeSymbol : undefined}
+                onStockClick={onAlertClick}
+              />
+            </section>
+          )}
         </aside>
       </div>
     </>

@@ -14,8 +14,12 @@ job, 每次 fire 时在 Python 侧判断: 工作日 + A 股连续竞价时段 (�
 os.replace 原子写。日期与时刻在写入/读取前都先解析再重新格式化, 目录与
 文件名不直接拼接外部输入, 防路径穿越。
 
+滚动清理: 保留近 RETENTION_DAYS 天 (与 alert_store 同思路), 落盘成功后
+按需 prune, 避免目录随交易日无限增长 (每交易日约 50 个全量快照 JSON)。
+
 回溯读取: load_nearest 取「不晚于目标时刻的最近节点」; 目标早于当日首个
-节点时回退首个节点, 保证拖到开盘前仍有内容可看。
+节点时回退首个节点, 保证拖到开盘前仍有内容可看; 首选节点文件损坏时按
+临近程度回退更早/更晚节点。
 """
 from __future__ import annotations
 
@@ -23,9 +27,11 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date as dt_date
+from datetime import datetime, timedelta
 from datetime import time as dt_time
 from pathlib import Path
 from typing import Any
@@ -36,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_DIR_NAME = "board_snapshots"
 RECORD_INTERVAL_MINUTES = 5
+# 滚动清理保留窗 (天): 只删快照根目录下「目录名可解析为日期且早于 cutoff」的子目录
+RETENTION_DAYS = 30
 # 两个竞价时段起点 (北京时间), 与 market_time 的连续竞价窗口一致
 _SESSION_STARTS = (dt_time(9, 30), dt_time(13, 0))
 
@@ -123,6 +131,39 @@ def record_snapshot(app_state: Any, now: datetime | None = None) -> dict:
 
 
 # ================================================================
+# 滚动清理 (与 alert_store 同思路: 保留近 N 天, 防目录无限增长)
+# ================================================================
+
+def prune_older_than(data_dir: Path | str, now: datetime, keep_days: int = RETENTION_DAYS) -> list[str]:
+    """删除早于保留窗的日期目录, 返回被删除的日期列表。
+
+    fail-closed: 只删快照根目录下「目录名可解析为日期且早于 cutoff」的子目录,
+    非日期目录名、根目录之外的一切均不触碰; 单个目录删除失败只记警告。
+    """
+    root = snapshots_root(data_dir)
+    if not root.is_dir():
+        return []
+    cutoff = (now - timedelta(days=keep_days)).date()
+    removed: list[str] = []
+    for entry in root.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            day = dt_date.fromisoformat(normalize_day(entry.name))
+        except ValueError:
+            continue
+        if day >= cutoff:
+            continue
+        try:
+            shutil.rmtree(entry)
+        except OSError as e:
+            logger.warning("看板快照过期目录删除失败 %s: %s", entry.name, e)
+            continue
+        removed.append(entry.name)
+    return removed
+
+
+# ================================================================
 # 读取 (回溯)
 # ================================================================
 
@@ -164,25 +205,32 @@ def list_times(data_dir: Path | str, day: str) -> list[str]:
 def load_nearest(data_dir: Path | str, day: str, hhmm: str | None = None) -> tuple[str, dict] | None:
     """取该日期「不晚于 hhmm 的最近节点」; hhmm 缺省/早于首节点时取最后一个/第一个节点。
 
+    首选节点文件读取失败 (写一半/损坏) 时按临近程度回退: 先更早节点, 再更晚节点;
+    全部不可读才返回 None。
+
     Returns:
-        (节点时刻 "HH:MM", 快照 dict); 该日期无快照时为 None。
+        (节点时刻 "HH:MM", 快照 dict); 无可读快照时为 None。
     """
     times = list_times(data_dir, day)
     if not times:
         return None
     if hhmm is None or not str(hhmm).strip():
-        chosen = times[-1]
+        preferred = times
     else:
         target = normalize_hhmm(hhmm)
-        at_or_before = [t for t in times if t <= target]
-        chosen = at_or_before[-1] if at_or_before else times[0]
-    path = snapshots_root(data_dir) / normalize_day(day) / f"{chosen.replace(':', '')}.json"
-    try:
-        snapshot = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("看板快照读取失败 %s: %s", path.name, e)
-        return None
-    return chosen, snapshot
+        preferred = [t for t in times if t <= target] or [times[0]]
+    preferred_set = set(preferred)
+    # 候选顺序: 首选集新→旧, 之后其余节点旧→新 (尽量贴近目标时刻)
+    candidates = list(reversed(preferred)) + [t for t in times if t not in preferred_set]
+    for chosen in candidates:
+        path = snapshots_root(data_dir) / normalize_day(day) / f"{chosen.replace(':', '')}.json"
+        try:
+            snapshot = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning("看板快照读取失败 %s: %s", path.name, e)
+            continue
+        return chosen, snapshot
+    return None
 
 
 # ================================================================
@@ -228,6 +276,14 @@ def run_due_record(app_state: Any, now: datetime | None = None) -> dict | None:
         "看板快照已落盘 %s %s (%s 字节, as_of=%s)",
         result["date"], result["time"], result["bytes"], result["as_of"],
     )
+    # 滚动清理: 落盘成功后顺带 prune (一级目录扫描, 成本可忽略; 失败不影响落盘结果)
+    try:
+        removed = prune_older_than(app_state.repo.store.data_dir, now)
+    except Exception as e:
+        logger.warning("看板快照滚动清理失败: %s", e)
+        removed = []
+    if removed:
+        logger.info("看板快照已滚动清理 %d 个过期日期: %s", len(removed), ", ".join(removed))
     return result
 
 

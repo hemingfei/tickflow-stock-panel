@@ -100,6 +100,22 @@ def test_load_nearest_floor_and_fallbacks(tmp_path):
     assert store.load_nearest(tmp_path, "2026-09-03", "10:00") is None
 
 
+def test_load_nearest_corrupt_node_falls_back(tmp_path):
+    """首选节点文件损坏时回退更早节点; 全部不可读才 None。"""
+    store.set_snapshot_builder(lambda state: {"as_of": "2026-09-02"})
+    for hh, mm in ((9, 30), (9, 35), (9, 40)):
+        store.record_snapshot(_state(tmp_path), now=_dt(2026, 9, 2, hh, mm))
+    # 损坏首选节点 (目标 10:00 → 首选 09:40)
+    (tmp_path / "board_snapshots" / "2026-09-02" / "0940.json").write_text("{broken", encoding="utf-8")
+    chosen, snapshot = store.load_nearest(tmp_path, "2026-09-02", "10:00")
+    assert chosen == "09:35"
+    assert snapshot["as_of"] == "2026-09-02"
+    # 全部损坏 → None (API 层表现为 404)
+    for name in ("0930.json", "0935.json"):
+        (tmp_path / "board_snapshots" / "2026-09-02" / name).write_text("{broken", encoding="utf-8")
+    assert store.load_nearest(tmp_path, "2026-09-02", "10:00") is None
+
+
 def test_run_due_record_aligned_and_dedup(tmp_path):
     store.set_snapshot_builder(lambda state: {"as_of": "2026-09-02"})
     state = _state(tmp_path)
@@ -126,6 +142,37 @@ def test_run_due_record_builder_failure_is_swallowed(tmp_path):
     assert store.run_due_record(_state(tmp_path), now=_dt(2026, 9, 2, 9, 35)) is None
     # 构建失败不写文件, 也不影响同分钟之后的重试语义 (仅记警告)
     assert store.list_dates(tmp_path) == []
+
+
+# ---------- 滚动清理 ----------
+
+def test_prune_older_than(tmp_path):
+    """只删早于保留窗的日期目录; 近期目录、非日期目录与散文件不动。"""
+    root = tmp_path / "board_snapshots"
+    for day in ("2026-07-01", "2026-08-04", "2026-08-05", "2026-09-02"):
+        (root / day).mkdir(parents=True)
+        (root / day / "0935.json").write_text("{}", encoding="utf-8")
+    (root / "not-a-date").mkdir()
+    (root / "stray.json").write_text("{}", encoding="utf-8")
+    now = _dt(2026, 9, 5, 10, 0)  # cutoff = 2026-08-06
+
+    removed = store.prune_older_than(tmp_path, now)
+    assert sorted(removed) == ["2026-07-01", "2026-08-04", "2026-08-05"]
+    assert sorted(d.name for d in root.iterdir()) == ["2026-09-02", "not-a-date", "stray.json"]
+
+
+def test_run_due_record_prunes_expired_days(tmp_path):
+    """落盘成功后顺带滚动清理过期日期。"""
+    expired = tmp_path / "board_snapshots" / "2026-01-05"
+    expired.mkdir(parents=True)
+    (expired / "0935.json").write_text("{}", encoding="utf-8")
+    store.set_snapshot_builder(lambda state: {"as_of": "2026-09-02"})
+    state = _state(tmp_path)
+    store.reset_record_state()
+
+    assert store.run_due_record(state, now=_dt(2026, 9, 2, 9, 35)) is not None
+    assert not expired.exists()
+    assert (tmp_path / "board_snapshots" / "2026-09-02" / "0935.json").is_file()
 
 
 def test_record_without_builder_raises(tmp_path):
@@ -187,12 +234,15 @@ def test_api_errors(client):
 # ---------- 公开回放 API (免登录独立页) ----------
 
 def test_api_public_load_strips_alerts(client):
-    """公开端点剥离监控中心告警 (含策略名/自选标的), 行情数据保持完整。"""
+    """公开端点剥离监控中心告警 (含策略名/自选标的) 与服务器私有状态块, 行情数据保持完整。"""
     api_client, tmp_path = client
     store.set_snapshot_builder(lambda state: {
         "as_of": "2026-09-02",
         "overview": {"emotion": {"score": 31}},
         "alerts": {"alerts": [{"symbol": "600000.SH", "message": "触发策略「私密策略」"}], "total": 1},
+        "settings": {"mode": "key", "onboarding_completed": True},
+        "data_status": {"enriched": {"trading_days": 250}, "daily": {"trading_days": 250}},
+        "capabilities": {"label": "标准版", "capabilities": {"depth5.batch": True}},
     })
     store.record_snapshot(_state(tmp_path), now=_dt(2026, 9, 2, 9, 35))
 
@@ -202,6 +252,10 @@ def test_api_public_load_strips_alerts(client):
     assert body["snapshot_time"] == "09:35"
     assert body["snapshot"]["alerts"] == {"alerts": [], "total": 0}
     assert body["snapshot"]["overview"]["emotion"]["score"] == 31
+    # 服务器私有状态块剥离; 封板降级判断所需的 capabilities 保留
+    assert "settings" not in body["snapshot"]
+    assert "data_status" not in body["snapshot"]
+    assert body["snapshot"]["capabilities"] == {"capabilities": {"depth5.batch": True}}
 
     assert api_client.get("/api/public/replay/dates").json() == {"dates": ["2026-09-02"]}
     assert api_client.get("/api/public/replay/times", params={"date": "2026-09-02"}).json()["times"] == ["09:35"]
@@ -216,12 +270,14 @@ def test_api_public_stays_read_over_internal_data(client):
     store.set_snapshot_builder(lambda state: {
         "as_of": "2026-09-02",
         "alerts": {"alerts": [{"symbol": "600000.SH"}], "total": 1},
+        "settings": {"mode": "key", "onboarding_completed": True},
     })
     store.record_snapshot(_state(tmp_path), now=_dt(2026, 9, 2, 9, 35))
     api_client.get("/api/public/replay/load")
-    # 站内端点仍返回完整告警
+    # 站内端点仍返回完整告警与私有状态块
     internal = api_client.get("/api/board-snapshots/load").json()
     assert internal["snapshot"]["alerts"]["total"] == 1
+    assert internal["snapshot"]["settings"] == {"mode": "key", "onboarding_completed": True}
 
 
 def test_auth_whitelist_bypasses_login_for_public_replay(tmp_path, monkeypatch):

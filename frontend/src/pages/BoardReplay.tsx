@@ -73,13 +73,15 @@ export function BoardReplay({ variant = 'internal' }: { variant?: 'internal' | '
     if (!date && dates.length > 0) setDate(dates[dates.length - 1])
   }, [date, dates])
 
-  // 快照不可变: 60s 轮询时刻列表 (看当天最新节点逐步出现), 节点变化才取新快照
+  // 快照不可变: 60s 轮询时刻列表, 但仅限最新快照日期 (当天节点盘中逐步出现);
+  // 历史日期节点已定格, 不轮询。
+  const isLatestDate = date !== '' && date === dates[dates.length - 1]
   const timesQ = useQuery({
     queryKey: (isPublic ? QK.publicReplayTimes : QK.boardSnapshotTimes)(date),
     queryFn: () => (isPublic ? api.publicReplayTimes : api.boardSnapshotTimes)(date),
     enabled: !!date,
     staleTime: 60_000,
-    refetchInterval: 60_000,
+    refetchInterval: isLatestDate ? 60_000 : false,
   })
   const times = useMemo(() => timesQ.data?.times ?? [], [timesQ.data])
 
@@ -250,13 +252,15 @@ export function BoardReplay({ variant = 'internal' }: { variant?: 'internal' | '
       ) : !snap.overview ? (
         <EmptyState icon={History} title="快照数据不完整" hint="该快照缺少看板主体数据, 可能由旧版本生成。" />
       ) : (
-        /* 只读回放: 屏蔽一切点击下钻, 内容与当时看板一致 */
+        /* 只读回放: 屏蔽一切点击下钻, 内容与当时看板一致;
+           公开回放隐藏监控中心 (告警已剥离, 空板块会被误读为「当时无告警」) */
         <div className="pointer-events-none select-none" title="回溯快照为只读展示">
           <BoardContent
             data={snap.overview}
             alerts={snap.alerts?.alerts ?? []}
             hasDepth={hasDepth}
             sealedReady={sealedReady}
+            showMonitor={!isPublic}
           />
         </div>
       )}
