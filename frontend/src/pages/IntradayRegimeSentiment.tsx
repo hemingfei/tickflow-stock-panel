@@ -2,6 +2,11 @@
  * 实时环境情绪页 - 实时环境与实时情绪的合并页
  * 顶部状态栏的日期选择与刷新同时作用于两个板块;
  * 两个走势图通过 echarts.connect 十字光标联动, 悬停任一走势图时两侧数据卡片与雷达图同步更新
+ *
+ * 两个入口共用本组件:
+ *   - variant="internal" (默认): 站内 /intraday-regime-sentiment, 需登录, 带「立即更新」按钮;
+ *   - variant="public": 免登录独立页 /sentiment, 走认证白名单 /api/public/env/* 只读端点,
+ *     无「立即更新」按钮 (compute 计算入口不公开), 数据靠 30s/60s 轮询保持实时。
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -121,7 +126,8 @@ function pickAlignedRow<T>(map: Map<string, T>, hoverLabel: string | null): T | 
   return values.length > 0 ? values[values.length - 1] : null
 }
 
-export function IntradayRegimeSentiment() {
+export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'internal' | 'public' }) {
+  const isPublic = variant === 'public'
   const qc = useQueryClient()
   const [hoverLabel, setHoverLabel] = useState<string | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
@@ -129,12 +135,12 @@ export function IntradayRegimeSentiment() {
 
   // 查询可用日期 (两个板块各自维护, 取交集保证所选日期两侧都有数据)
   const envDates = useQuery({
-    queryKey: ['intradayRegimeDates'],
-    queryFn: () => api.intradayRegimeDates(),
+    queryKey: [isPublic ? 'publicIntradayRegimeDates' : 'intradayRegimeDates'],
+    queryFn: isPublic ? api.publicEnvRegimeDates : api.intradayRegimeDates,
   })
   const sentDates = useQuery({
-    queryKey: ['intradaySentimentDates'],
-    queryFn: () => api.intradaySentimentDates(),
+    queryKey: [isPublic ? 'publicIntradaySentimentDates' : 'intradaySentimentDates'],
+    queryFn: isPublic ? api.publicEnvSentimentDates : api.intradaySentimentDates,
   })
   const enabledDates = useMemo(() => {
     const env = envDates.data?.dates
@@ -145,20 +151,20 @@ export function IntradayRegimeSentiment() {
 
   // 查询状态
   const envStatus = useQuery({
-    queryKey: ['intradayRegimeStatus'],
-    queryFn: () => api.intradayRegimeStatus(),
+    queryKey: [isPublic ? 'publicIntradayRegimeStatus' : 'intradayRegimeStatus'],
+    queryFn: isPublic ? api.publicEnvRegimeStatus : api.intradayRegimeStatus,
     refetchInterval: 30000,
   })
 
   // 查询历史数据 (与环境/情绪单页共享缓存)
   const envHistory = useQuery({
-    queryKey: ['intradayRegimeHistory', selectedDate],
-    queryFn: () => api.intradayRegimeHistory(selectedDate ?? undefined),
+    queryKey: [isPublic ? 'publicIntradayRegimeHistory' : 'intradayRegimeHistory', selectedDate],
+    queryFn: () => (isPublic ? api.publicEnvRegimeHistory : api.intradayRegimeHistory)(selectedDate ?? undefined),
     refetchInterval: selectedDate ? undefined : 60000,
   })
   const sentHistory = useQuery({
-    queryKey: ['intradaySentimentHistory', selectedDate],
-    queryFn: () => api.intradaySentimentHistory(selectedDate ?? undefined),
+    queryKey: [isPublic ? 'publicIntradaySentimentHistory' : 'intradaySentimentHistory', selectedDate],
+    queryFn: () => (isPublic ? api.publicEnvSentimentHistory : api.intradaySentimentHistory)(selectedDate ?? undefined),
     refetchInterval: selectedDate ? undefined : 60000,
   })
 
@@ -603,12 +609,14 @@ export function IntradayRegimeSentiment() {
               <Clock className="h-3 w-3" />
               {envStatus.data?.trading_time ? '交易时段' : '非交易时段'}
             </div>
-            <button onClick={handleRefresh} disabled={isRefreshing || !!selectedDate}
-              className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn border border-border bg-base text-xs text-secondary hover:text-accent disabled:opacity-50"
-            >
-              {isRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-              {isRefreshing ? '更新中…' : '立即更新'}
-            </button>
+            {!isPublic && (
+              <button onClick={handleRefresh} disabled={isRefreshing || !!selectedDate}
+                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-btn border border-border bg-base text-xs text-secondary hover:text-accent disabled:opacity-50"
+              >
+                {isRefreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                {isRefreshing ? '更新中…' : '立即更新'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -668,7 +676,7 @@ export function IntradayRegimeSentiment() {
                 </>
               ) : (
                 <div className="flex flex-1 items-center justify-center rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-                  {envHistory.isLoading ? '加载中…' : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
+                  {envHistory.isLoading ? '加载中…' : isPublic ? '暂无实时环境数据，请在交易时段查看' : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
                 </div>
               )}
             </div>
@@ -738,7 +746,7 @@ export function IntradayRegimeSentiment() {
                 </>
               ) : (
                 <div className="flex flex-1 items-center justify-center rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-                  {sentHistory.isLoading ? '加载中…' : '暂无实时情绪数据，请等待交易时段或点击「立即更新」'}
+                  {sentHistory.isLoading ? '加载中…' : isPublic ? '暂无实时情绪数据，请在交易时段查看' : '暂无实时情绪数据，请等待交易时段或点击「立即更新」'}
                 </div>
               )}
             </div>
@@ -752,4 +760,9 @@ export function IntradayRegimeSentiment() {
       </section>
     </div>
   )
+}
+
+/** 免登录独立页 (/sentiment): 无应用外壳, 与站内实时环境情绪页共用同一组件 */
+export function PublicIntradayRegimeSentiment() {
+  return <IntradayRegimeSentiment variant="public" />
 }

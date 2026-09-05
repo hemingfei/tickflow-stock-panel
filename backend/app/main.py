@@ -488,8 +488,9 @@ app.add_middleware(
 #   2. 未设密码 + 公网       → 拒绝(403, 防裸奔也防抢占; 引导本机设密码)
 #   3. 已设密码              → 检查 session, 无效则 401(前端跳登录)
 # 白名单: /api/auth/* (设密码/登录本身)、/health 等探活、
-# /api/public/replay/* (免登录看板回放独立页, 响应已剥离个人告警)。
-_AUTH_WHITELIST_PREFIX = ("/api/auth/", "/api/public/replay/")
+# /api/public/replay/* (免登录看板回放独立页, 响应已剥离个人告警)、
+# /api/public/env/* (免登录实时环境情绪页, 只读聚合数据, compute 不公开)。
+_AUTH_WHITELIST_PREFIX = ("/api/auth/", "/api/public/replay/", "/api/public/env/")
 _AUTH_WHITELIST_EXACT = ("/health", "/api/health", "/openapi.json", "/docs", "/redoc")
 
 
@@ -558,6 +559,8 @@ app.include_router(alerts.router)
 app.include_router(rps.router)
 app.include_router(sentiment_intraday.router)
 app.include_router(regime_intraday.router)
+app.include_router(regime_intraday.public_router)
+app.include_router(sentiment_intraday.public_router)
 
 # 二次开发路由与小粒度策略在所有核心路由后注册, 禁止覆盖核心路径。
 extension_registry, extension_load_errors = configure_backend_extensions(app)

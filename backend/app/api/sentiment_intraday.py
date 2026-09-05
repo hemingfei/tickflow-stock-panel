@@ -94,5 +94,21 @@ def intraday_sentiment_dates(request: Request):
     
     # 去重并按日期降序排序
     unique_dates = sorted(list(set(dates)), reverse=True)
-    
+
     return {"dates": [d.isoformat() for d in unique_dates]}
+
+
+# ===== 公开实时情绪 (免登录独立页, 认证中间件白名单) =====
+# 只读端点复用站内同一实现; 数据为全市场聚合口径, 无个人策略/自选信息;
+# compute (触发服务端计算) 不公开。
+public_router = APIRouter(prefix="/api/public/env/sentiment", tags=["sentiment-intraday"])
+
+
+@public_router.get("/history")
+def public_intraday_sentiment_history(request: Request, target_date: date | None = None):
+    return intraday_sentiment_history(request, target_date)
+
+
+@public_router.get("/dates")
+def public_intraday_sentiment_dates(request: Request):
+    return intraday_sentiment_dates(request)

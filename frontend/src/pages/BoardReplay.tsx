@@ -99,10 +99,13 @@ export function BoardReplay({ variant = 'internal' }: { variant?: 'internal' | '
   })
   const snap = snapQ.data?.snapshot
 
-  // 状态同步回 URL (replace 不产生历史记录), 保证任意时刻可复制链接直达
+  // 状态同步回 URL (replace 不产生历史记录), 保证任意时刻可复制链接直达;
+  // 在既有参数上改写 date/time, 保留外层页面的参数 (如合并页 /share 的 tab)
   useEffect(() => {
     if (!date || times.length === 0) return
-    const next = new URLSearchParams({ date, time: minutesToHHMM(sliderValue) })
+    const next = new URLSearchParams(searchParams)
+    next.set('date', date)
+    next.set('time', minutesToHHMM(sliderValue))
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true })
     }

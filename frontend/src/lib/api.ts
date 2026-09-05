@@ -2727,8 +2727,22 @@ export const api = {
     return request<{ dates: string[] }>('/api/regime/intraday/dates')
   },
   intradayRegimeStatus: () => request<IntradayRegimeStatus>('/api/regime/intraday/status'),
-  intradayRegimeCompute: (force: boolean = false) => 
+  intradayRegimeCompute: (force: boolean = false) =>
     request<{ ok: boolean; data: IntradayRegimeRow | null }>(`/api/regime/intraday/compute?force=${force}`, { method: 'POST' }),
+
+  // 免登录公开实时环境情绪 (独立 URL /sentiment): 只读 GET 端点, 认证白名单直放;
+  // 数据为全市场聚合口径; compute 计算入口不公开
+  publicEnvRegimeDates: () => request<{ dates: string[] }>('/api/public/env/regime/dates'),
+  publicEnvRegimeHistory: (targetDate?: string) => {
+    const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : ''
+    return request<{ data: IntradayRegimeRow[]; count: number }>(`/api/public/env/regime/history${qs}`)
+  },
+  publicEnvRegimeStatus: () => request<IntradayRegimeStatus>('/api/public/env/regime/status'),
+  publicEnvSentimentDates: () => request<{ dates: string[] }>('/api/public/env/sentiment/dates'),
+  publicEnvSentimentHistory: (targetDate?: string) => {
+    const qs = targetDate ? `?target_date=${encodeURIComponent(targetDate)}` : ''
+    return request<{ data: IntradaySentimentRow[]; count: number }>(`/api/public/env/sentiment/history${qs}`)
+  },
 
   limitLadder: (asOf?: string, extColumns?: string, direction?: 'up' | 'down') => {
     const params = new URLSearchParams()

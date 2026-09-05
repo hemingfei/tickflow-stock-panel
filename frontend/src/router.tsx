@@ -41,6 +41,10 @@ const EmotionCycle = lazy(() => import('./pages/EmotionCycle').then(m => ({ defa
 const IntradaySentiment = lazy(() => import('./pages/IntradaySentiment').then(m => ({ default: m.IntradaySentiment })))
 const IntradayRegime = lazy(() => import('./pages/IntradayRegime').then(m => ({ default: m.IntradayRegime })))
 const IntradayRegimeSentiment = lazy(() => import('./pages/IntradayRegimeSentiment').then(m => ({ default: m.IntradayRegimeSentiment })))
+// 免登录公开实时环境情绪页: 无应用外壳, 与站内页共用组件 (后端只读聚合端点)
+const PublicIntradayRegimeSentiment = lazy(() => import('./pages/IntradayRegimeSentiment').then(m => ({ default: m.PublicIntradayRegimeSentiment })))
+// 免登录公开分享页: 看板回放 + 实时环境情绪 二合一标签切换
+const PublicShare = lazy(() => import('./pages/PublicShare').then(m => ({ default: m.PublicShare })))
 const LiveIndices = lazy(() => import('./pages/LiveIndices').then(m => ({ default: m.LiveIndices })))
 const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ default: m.AbnormalMoves })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
@@ -52,6 +56,8 @@ const CORE_ROUTE_PATHS = new Set([
   '/overview',
   '/board-replay',
   '/replay',
+  '/sentiment',
+  '/share',
   '/analysis',
   '/analysis/:menuId',
   '/concept-analysis',
@@ -125,6 +131,16 @@ export const router = createBrowserRouter([
     // 免登录公开回放: 独立 URL, 不挂 OnboardingGuard/Layout, API 走认证白名单
     path: '/replay',
     element: <PublicBoardReplay />,
+  },
+  {
+    // 免登录公开实时环境情绪: 独立 URL, 不挂 OnboardingGuard/Layout, API 走认证白名单
+    path: '/sentiment',
+    element: <PublicIntradayRegimeSentiment />,
+  },
+  {
+    // 免登录公开分享页: 回放 + 实时环境情绪二合一, 不挂 OnboardingGuard/Layout
+    path: '/share',
+    element: <PublicShare />,
   },
   {
     path: '/',

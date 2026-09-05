@@ -82,3 +82,24 @@ def intraday_regime_dates(request: Request):
     
     return {"dates": [d.isoformat() for d in unique_dates]}
 
+
+# ===== 公开实时环境 (免登录独立页, 认证中间件白名单) =====
+# 只读端点复用站内同一实现; 数据为全市场聚合口径, 无个人策略/自选信息;
+# compute (触发服务端计算) 不公开。
+public_router = APIRouter(prefix="/api/public/env/regime", tags=["regime-intraday"])
+
+
+@public_router.get("/history")
+def public_intraday_regime_history(request: Request, target_date: date | None = None):
+    return intraday_regime_history(request, target_date)
+
+
+@public_router.get("/status")
+def public_intraday_regime_status(request: Request):
+    return intraday_regime_status(request)
+
+
+@public_router.get("/dates")
+def public_intraday_regime_dates(request: Request):
+    return intraday_regime_dates(request)
+
