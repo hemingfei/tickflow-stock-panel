@@ -10,6 +10,10 @@ Python 侧判断 —— 已启用、周一~周五、处于任一时间窗内 (�
 本身不触发, 天级对齐, 重启/改配置不漂移) —— 全部满足才构建快照并发送。相比 IntervalTrigger: 改动配置只需写
 preferences.json (job 每 fire 重读), 无需增删 job; 窗口外的 fire 只是一次
 廉价的时间判断。
+消息头部为「实时环境情绪」页的两项实时值 (推送时从 intraday_regime /
+intraday_sentiment 服务取当日最新一条, 与页面同源): 环境 (状态标签+综合分)
+与 情绪 (情绪标签+情绪分), 取代快照自带的静态情绪评分; 配置了分享页外部
+基地址 (share_base_url) 时在消息末尾附 /share 二合一在线页链接。
 发送格式: channels 多选推送平台 (feishu/wecom/kol), 地址复用「推送通知」的
 全局渠道配置 —— feishu 按飞书自定义机器人规范发 interactive 卡片 (走
 send_feishu_card); wecom 按企业微信群推送 Webhook 发 markdown 摘要;
@@ -279,11 +283,68 @@ def _rank_cell(item: dict) -> str:
     return f"{base}({names})" if names else base
 
 
-def _render_board(snapshot: dict, bold: bool) -> str:
-    """渲染看板快照核心区块 (指数含点位/涨跌/涨停梯队含高位股名/成交/趋势/榜单/概念与行业热度/最近告警)。
+# ================================================================
+# 「实时环境情绪」页实时值 (消息头部) 与 /share 分享页链接
+# ================================================================
+
+def _live_rows(app_state: Any) -> dict:
+    """取「实时环境情绪」页两值的当日最新记录: env=实时环境, sent=实时情绪。
+
+    与页面同源: 复用 intraday_regime / intraday_sentiment 服务单例的 get_latest。
+    repo 未就绪或读取失败时对应侧为 None (消息只是少一行), 不阻断看板推送。
+    """
+    repo = getattr(app_state, "repo", None)
+    live: dict = {"env": None, "sent": None}
+    if repo is None:
+        return live
+    try:
+        from app.services.intraday_regime import get_intraday_regime_service
+        env_svc = get_intraday_regime_service()
+        env_svc.set_repo(repo)
+        live["env"] = env_svc.get_latest()
+    except Exception:
+        logger.exception("读取实时环境最新数据失败")
+    try:
+        from app.services.intraday_sentiment import get_intraday_sentiment_service
+        sent_svc = get_intraday_sentiment_service()
+        sent_svc.set_repo(repo)
+        live["sent"] = sent_svc.get_latest()
+    except Exception:
+        logger.exception("读取实时情绪最新数据失败")
+    return live
+
+
+def _share_url(cfg: dict) -> str | None:
+    """按配置的分享页外部基地址拼 /share 二合一页链接; 未配置返回 None (不附链接)。"""
+    base = str(cfg.get("share_base_url") or "").strip().rstrip("/")
+    return f"{base}/share" if base else None
+
+
+def _score_text(v: Any) -> str:
+    f = _finite(v)
+    return "—" if f is None else f"{f:g}分"
+
+
+def _regime_text(env: dict) -> str:
+    """环境值: 中文状态标签 + 综合分 (state 存英文键, 映射复用 regime_builder.STATE_LABELS)。"""
+    from app.services.regime_builder import STATE_LABELS
+
+    label = STATE_LABELS.get(str(env.get("state") or ""), "—")
+    return f"{label} {_score_text(env.get('score'))}"
+
+
+def _sentiment_text(sent: dict) -> str:
+    """情绪值: 情绪标签 (后端已存中文) + 情绪分。"""
+    return f"{sent.get('emotion_label') or '—'} {_score_text(sent.get('emotion_score'))}"
+
+
+def _render_board(snapshot: dict, bold: bool, live: dict | None = None) -> str:
+    """渲染看板快照核心区块 (头部为实时环境/实时情绪两项实时值, 其后为指数含点位/涨跌/
+    涨停梯队含高位股名/成交/趋势/榜单/概念与行业热度/最近告警, 末尾附可选在线页链接)。
 
     bold=True 输出 markdown 加粗标签 (飞书卡片 lark_md); False 为纯文本
     (KOL Webhook 简化格式与富文本 post 都只提取纯文本, 加粗标记会原样露出)。
+    live 为 _live_rows 的返回 (+可选 share_url), 缺侧时对应行省略。
     字段单位经前端渲染逻辑核实, 不做启发式换算; 缺字段时显示 —, 不抛异常。
     """
 
@@ -292,15 +353,19 @@ def _render_board(snapshot: dict, bold: bool) -> str:
 
     ov = snapshot.get("overview") if isinstance(snapshot.get("overview"), dict) else {}
     lines: list[str] = []
+    live = live or {}
 
     dt_info = snapshot.get("data_time") if isinstance(snapshot.get("data_time"), dict) else {}
     dt_text = str(dt_info.get("text") or "").strip()
     if dt_text:
         lines.append(f"{_b('数据时间')} {dt_text}")
 
-    emo = ov.get("emotion") or {}
-    if emo:
-        lines.append(f"{_b('情绪评分')}: {emo.get('label', '—')} {emo.get('score', '—')}")
+    env = live.get("env") or {}
+    if env:
+        lines.append(f"{_b('环境')} {_regime_text(env)}")
+    sent = live.get("sent") or {}
+    if sent:
+        lines.append(f"{_b('情绪')} {_sentiment_text(sent)}")
 
     br = ov.get("breadth") or {}
     if br:
@@ -381,25 +446,31 @@ def _render_board(snapshot: dict, bold: bool) -> str:
             if msg:
                 lines.append(f"- {msg}")
 
+    share_url = str(live.get("share_url") or "").strip()
+    if share_url:
+        lines.append(f"{_b('在线页')} {share_url}")
+
     return "\n".join(lines) if lines else "看板暂无数据"
 
 
-def render_board_markdown(snapshot: dict) -> str:
+def render_board_markdown(snapshot: dict, live: dict | None = None) -> str:
     """飞书卡片版摘要 (lark_md 加粗标签, 行式布局 — lark_md 不支持表格语法)。"""
-    return _render_board(snapshot, bold=True)
+    return _render_board(snapshot, bold=True, live=live)
 
 
-def render_board_text(snapshot: dict) -> str:
+def render_board_text(snapshot: dict, live: dict | None = None) -> str:
     """纯文本版摘要 (KOL Webhook 简化格式的 text 字段)。"""
-    return _render_board(snapshot, bold=False)
+    return _render_board(snapshot, bold=False, live=live)
 
 
-def render_board_markdown_table(snapshot: dict) -> str:
+def render_board_markdown_table(snapshot: dict, live: dict | None = None) -> str:
     """表格版 markdown 摘要 — 供 KOL Webhook 等可渲染 markdown 的下游使用。
 
-    与行式摘要同源同单位 (指数含点位、梯队含高位股名、概念/行业强弱、最近告警),
+    与行式摘要同源同单位 (头部为实时环境/实时情绪两项实时值, 指数含点位、
+    梯队含高位股名、概念/行业强弱、最近告警, 末尾附可选在线页链接),
     用 markdown 表格组织, 排版更整洁。数据缺块时整表省略, 不产出空表。
     """
+    live = live or {}
     ov = snapshot.get("overview") if isinstance(snapshot.get("overview"), dict) else {}
     sections: list[str] = []
 
@@ -408,9 +479,12 @@ def render_board_markdown_table(snapshot: dict) -> str:
     if dt_text:
         sections.append(f"**数据时间** {dt_text}")
 
-    emo = ov.get("emotion") or {}
-    if emo:
-        sections.append(f"**情绪评分**: {emo.get('label', '—')} {emo.get('score', '—')}")
+    env = live.get("env") or {}
+    if env:
+        sections.append(f"**环境** {_regime_text(env)}")
+    sent = live.get("sent") or {}
+    if sent:
+        sections.append(f"**情绪** {_sentiment_text(sent)}")
 
     # 市场概览 (KPI 表)
     kpi_rows: list[list[str]] = []
@@ -507,35 +581,47 @@ def render_board_markdown_table(snapshot: dict) -> str:
             ])
         sections.append("**涨跌幅榜**\n\n" + _md_table(["股票", "涨跌幅", "股票", "涨跌幅"], rows))
 
+    share_url = str(live.get("share_url") or "").strip()
+    if share_url:
+        sections.append(f"**在线页** {share_url}")
+
     return "\n\n".join(sections) if sections else "看板暂无数据"
 
 
-def _send_feishu_board(url: str, secret: str, snapshot: dict) -> tuple[bool, str]:
+def _headline_suffix(live: dict) -> str:
+    """副标题/标题尾缀: · 环境 .. · 情绪 .. (按数据缺失逐项省略)。"""
+    parts = []
+    env = live.get("env") or {}
+    if env:
+        parts.append(f"环境 {_regime_text(env)}")
+    sent = live.get("sent") or {}
+    if sent:
+        parts.append(f"情绪 {_sentiment_text(sent)}")
+    return (" · " + " · ".join(parts)) if parts else ""
+
+
+def _send_feishu_board(url: str, secret: str, snapshot: dict, live: dict | None = None) -> tuple[bool, str]:
     """按飞书自定义机器人规范把看板快照发为 interactive 卡片。"""
     from app.services import webhook_adapter
 
     if not webhook_adapter.is_valid_feishu_url(url):
         return False, "飞书格式需为飞书自定义机器人地址 (https://open.feishu.cn/open-apis/bot/v2/hook/...)"
-    ov = snapshot.get("overview") if isinstance(snapshot.get("overview"), dict) else {}
-    emo = ov.get("emotion") or {}
     as_of = snapshot.get("as_of") or "—"
-    subtitle = f"{as_of}" + (f" · 情绪 {emo.get('label')} {emo.get('score')}/100" if emo else "")
-    body = render_board_markdown(snapshot)
+    subtitle = f"{as_of}{_headline_suffix(live or {})}"
+    body = render_board_markdown(snapshot, live=live)
     ok = webhook_adapter.send_feishu_card(url, "市场看板快照", subtitle, body, secret)
     return ok, ("飞书卡片已发送" if ok else "飞书推送失败 (详见服务端日志)")
 
 
-def _send_wecom_board(url: str, snapshot: dict) -> tuple[bool, str]:
+def _send_wecom_board(url: str, snapshot: dict, live: dict | None = None) -> tuple[bool, str]:
     """按企业微信群推送 Webhook 把看板快照发为 markdown 摘要 (与复盘推送同通道)。"""
     from app.services import webhook_adapter
 
     if not webhook_adapter.is_valid_wecom_url(url):
         return False, "企业微信 Webhook 地址非法, 请在「推送通知」中重新配置"
-    ov = snapshot.get("overview") if isinstance(snapshot.get("overview"), dict) else {}
-    emo = ov.get("emotion") or {}
     as_of = snapshot.get("as_of") or "—"
-    subtitle = f"{as_of}" + (f" · 情绪 {emo.get('label')} {emo.get('score')}/100" if emo else "")
-    body = f"**{subtitle}**\n\n{render_board_markdown(snapshot)}" if subtitle else render_board_markdown(snapshot)
+    subtitle = f"{as_of}{_headline_suffix(live or {})}"
+    body = f"**{subtitle}**\n\n{render_board_markdown(snapshot, live=live)}" if subtitle else render_board_markdown(snapshot, live=live)
     ok = webhook_adapter.send_wecom_markdown(url, "市场看板快照", body)
     return ok, ("企业微信已发送" if ok else "企业微信推送失败 (详见服务端日志)")
 
@@ -548,7 +634,7 @@ def _minute_stamp(snapshot: dict) -> str:
     return cn_now().strftime("%H%M")
 
 
-def _send_kol_board(url: str, secret: str, snapshot: dict) -> tuple[bool, str]:
+def _send_kol_board(url: str, secret: str, snapshot: dict, live: dict | None = None) -> tuple[bool, str]:
     """按系统 KOL Webhook 简化格式发送 (见 vpush「系统KOL-Webhook接入文档」)。
 
     请求体 {"text", "title", "msg_id"}; 配置了签名密钥时附加 timestamp + sign
@@ -558,13 +644,11 @@ def _send_kol_board(url: str, secret: str, snapshot: dict) -> tuple[bool, str]:
     from app.services import webhook_adapter
     from app.services.webhook_adapter import send_generic_webhook
 
-    ov = snapshot.get("overview") if isinstance(snapshot.get("overview"), dict) else {}
-    emo = ov.get("emotion") or {}
     as_of = snapshot.get("as_of") or "—"
-    title = f"市场看板快照 {as_of}" + (f" · 情绪 {emo.get('label')} {emo.get('score')}/100" if emo else "")
+    title = f"市场看板快照 {as_of}{_headline_suffix(live or {})}"
     payload: dict = {
         # markdown 表格版摘要 (下游平台渲染 markdown, 排版更整洁), 正文上限 8000 字符
-        "text": render_board_markdown_table(snapshot)[:8000],
+        "text": render_board_markdown_table(snapshot, live=live)[:8000],
         "title": title[:200],                          # 标题上限 200 字符 (超限自动截断)
         "msg_id": f"tickflow-board-{as_of}-{_minute_stamp(snapshot)}"[:128],
     }
@@ -600,6 +684,8 @@ def push_now(app_state: Any, webhook_url: str | None = None, cfg: dict | None = 
     按 cfg.channels 选定的平台逐个投递 (feishu=飞书卡片 / wecom=企业微信
     markdown / kol=KOL 简化格式), 地址复用「推送通知」的全局渠道配置;
     显式传 webhook_url 时原样 POST 快照 JSON (generic, 测试端点兼容路径)。
+    消息头部的实时环境/实时情绪两项实时值在推送时读取 (与「实时环境情绪」页
+    同源), cfg.share_base_url 配置了外部基地址时在消息末尾附 /share 在线页链接。
 
     Args:
         app_state:   FastAPI app.state (供快照构建器读取 repo / 服务单例)。
@@ -626,10 +712,16 @@ def push_now(app_state: Any, webhook_url: str | None = None, cfg: dict | None = 
             return result
 
     as_of: str | None = None
+    live: dict = {}
     try:
         snapshot = _build_snapshot(app_state)
         as_of = snapshot.get("as_of") if isinstance(snapshot, dict) else None
         body = json.dumps(snapshot, ensure_ascii=False).encode("utf-8")
+        # 实时环境/情绪两值与分享页链接只进渲染消息, 不改快照本身 (generic 原样 POST 契约不变)
+        live = _live_rows(app_state)
+        share = _share_url(cfg)
+        if share:
+            live["share_url"] = share
     except Exception as e:  # 快照构建失败计入状态, 不抛出
         logger.exception("看板快照构建失败")
         detail = f"快照构建失败: {e}"
@@ -643,15 +735,15 @@ def push_now(app_state: Any, webhook_url: str | None = None, cfg: dict | None = 
     for ch, url, secret in targets:
         if ch == "feishu":
             ok, send_detail = (
-                _send_feishu_board(url, secret, snapshot) if url
+                _send_feishu_board(url, secret, snapshot, live=live) if url
                 else (False, "飞书 Webhook 未配置, 请在「推送通知」中配置"))
         elif ch == "wecom":
             ok, send_detail = (
-                _send_wecom_board(url, snapshot) if url
+                _send_wecom_board(url, snapshot, live=live) if url
                 else (False, "企业微信 Webhook 未配置, 请在「推送通知」中配置"))
         elif ch == "kol":
             ok, send_detail = (
-                _send_kol_board(url, secret, snapshot) if url
+                _send_kol_board(url, secret, snapshot, live=live) if url
                 else (False, "KOL Webhook 未配置, 请在「推送通知」中配置"))
         else:  # generic: 显式地址原样 POST
             ok, send_detail = send_generic_webhook(url, snapshot)

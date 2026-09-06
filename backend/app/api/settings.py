@@ -1289,6 +1289,8 @@ class WebhookPushScheduleIn(BaseModel):
     # 时间窗列表, 至少 1 个; 上限在 preferences 层校验 (WEBHOOK_PUSH_MAX_WINDOWS)
     windows: list[WebhookPushWindowIn] = Field(
         default_factory=lambda: [WebhookPushWindowIn()], min_length=1)
+    # 可选: 分享页外部基地址, 推送消息拼 /share 二合一在线页链接; 留空不附
+    share_base_url: str = ""
 
 
 @router.put("/preferences/webhook-push-schedule")
@@ -1300,6 +1302,8 @@ def update_webhook_push_schedule(req: WebhookPushScheduleIn) -> dict:
       「推送通知」的全局渠道配置, 启用时至少选择 1 个平台。
     - windows: 时间窗数量可配置 (至少 1 个, 至多 WEBHOOK_PUSH_MAX_WINDOWS 个),
       每窗需 开始 < 结束; 触发时刻为 开始时间 + N*间隔 (N>=1, 开始本身不触发)。
+    - share_base_url: 可选分享页外部基地址 (http/https), 供推送消息拼
+      /share 二合一在线页链接; 校验在 preferences 层 (非法抛 400)。
     - 保存即生效: 定时 job 每分钟重读本配置, 无需重启或重新注册调度任务。
     """
     from app.services import preferences
@@ -1309,6 +1313,7 @@ def update_webhook_push_schedule(req: WebhookPushScheduleIn) -> dict:
             enabled=req.enabled,
             channels=req.channels,
             windows=[w.model_dump() for w in req.windows],
+            share_base_url=req.share_base_url,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

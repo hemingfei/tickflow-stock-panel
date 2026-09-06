@@ -771,9 +771,11 @@ def _normalize_push_windows(raw: object) -> list[dict]:
 def get_webhook_push_schedule() -> dict:
     """看板快照定时推送配置。默认关闭。
 
-    {"enabled": False, "channels": [], "windows": [...]}
+    {"enabled": False, "channels": [], "windows": [...], "share_base_url": ""}
     channels 为推送平台多选 (feishu/wecom/kol), 发送地址复用「推送通知」的
     全局渠道配置 (feishu_webhook_url / wecom_webhook_url / kol_webhook_url)。
+    share_base_url 为可选的分享页外部基地址 (如 http://192.168.1.10:8000),
+    推送消息用它拼 /share 二合一在线页链接, 未配置则不附链接。
     兼容旧版:
       - 缺 channels 时按旧 format 单选迁移: feishu→['feishu'], kol→['kol'];
         旧 generic (原样 POST 任意地址) 无中心地址可复用, 迁移为空列表 (需重新勾选)。
@@ -807,6 +809,7 @@ def get_webhook_push_schedule() -> dict:
         "enabled": bool(d.get("enabled", False)),
         "channels": channels,
         "windows": windows,
+        "share_base_url": str(d.get("share_base_url") or "").strip().rstrip("/"),
     }
 
 
@@ -814,6 +817,7 @@ def set_webhook_push_schedule(
     enabled: bool,
     channels: list,
     windows: list,
+    share_base_url: str = "",
 ) -> dict:
     """保存看板快照定时推送配置。
 
@@ -823,6 +827,8 @@ def set_webhook_push_schedule(
     至少 1 个、至多 WEBHOOK_PUSH_MAX_WINDOWS 个, 每窗起止齐全且 开始 < 结束,
     否则抛 ValueError (API 层转 400); 间隔裁剪到 WEBHOOK_PUSH_INTERVAL_RANGE。
     启用时至少选择 1 个平台, 否则抛 ValueError。
+    share_base_url 为可选分享页外部基地址: 留空=推送不附在线页链接;
+    非空需为 http(s) 地址 (末尾 / 归一化去除)。
     保存即生效: 定时 job 每次 fire 重读本配置, 无需重启或重新注册。
     """
     cleaned: list[str] = []
@@ -863,10 +869,15 @@ def set_webhook_push_schedule(
             "interval_minutes": max(lo, min(hi, interval)),
         })
 
+    share_base = str(share_base_url or "").strip().rstrip("/")
+    if share_base and not share_base.startswith(("http://", "https://")):
+        raise ValueError("分享页外部地址需以 http:// 或 https:// 开头")
+
     cfg = {
         "enabled": bool(enabled),
         "channels": cleaned,
         "windows": parsed,
+        "share_base_url": share_base,
     }
     save({"webhook_push_schedule": cfg})
     return cfg

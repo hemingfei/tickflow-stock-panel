@@ -1797,6 +1797,8 @@ export interface WebhookPushSchedule {
   channels: string[]
   /** 时间窗列表, 数量可增删 (至少 1 个), 每窗独立 开始/结束/间隔 */
   windows: WebhookPushWindow[]
+  /** 可选: 分享页外部基地址 (如 http://192.168.1.10:8000), 推送消息拼 /share 二合一在线页链接; 留空不附 */
+  share_base_url: string
 }
 
 /** 看板定时推送最近执行状态 (后端内存态, 重启清零) */
@@ -2103,7 +2105,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ url, secret }),
     }),
-  updateWebhookPushSchedule: (cfg: { enabled: boolean; channels: string[]; windows: WebhookPushWindow[] }) =>
+  updateWebhookPushSchedule: (cfg: { enabled: boolean; channels: string[]; windows: WebhookPushWindow[]; share_base_url: string }) =>
     request<{ webhook_push_schedule: WebhookPushSchedule }>('/api/settings/preferences/webhook-push-schedule', {
       method: 'PUT',
       body: JSON.stringify(cfg),

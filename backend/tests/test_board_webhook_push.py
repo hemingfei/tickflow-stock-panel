@@ -51,9 +51,18 @@ def _cfg(**overrides) -> dict:
         "enabled": True,
         "channels": ["kol"],
         "windows": [{"start_time": "09:30", "end_time": "15:00", "interval_minutes": 5}],
+        "share_base_url": "",
     }
     cfg.update(overrides)
     return cfg
+
+
+def _live() -> dict:
+    """「实时环境情绪」页两值的最新记录 (与后端 get_latest 返回同构)。"""
+    return {
+        "env": {"state": "lean_strong", "score": 62},
+        "sent": {"emotion_label": "偏暖", "emotion_score": 71},
+    }
 
 
 # ---------- 时间判断纯函数 ----------
@@ -185,17 +194,25 @@ def test_webhook_push_schedule_defaults_and_roundtrip(prefs_dir):
     assert preferences.get_webhook_push_schedule() == {
         "enabled": False, "channels": [],
         "windows": [{"start_time": "09:30", "end_time": "11:30", "interval_minutes": 5}],
+        "share_base_url": "",
     }
     saved = preferences.set_webhook_push_schedule(
         True, ["feishu", "kol"],
         [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 7},
-         {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 15}])
+         {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 15}],
+        share_base_url=" http://192.168.1.10:8000/ ")
     assert saved == {
         "enabled": True, "channels": ["feishu", "kol"],
         "windows": [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 7},
                     {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 15}],
+        "share_base_url": "http://192.168.1.10:8000",  # 去首尾空白与末尾 /
     }
     assert preferences.get_webhook_push_schedule() == saved
+
+    # 留空 = 清空分享页基地址 (推送不附在线页链接)
+    cleared = preferences.set_webhook_push_schedule(
+        False, [], [{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 7}], share_base_url="")
+    assert cleared["share_base_url"] == ""
 
 
 def test_webhook_push_schedule_legacy_format_migrated(prefs_dir):
@@ -296,6 +313,9 @@ def test_webhook_push_schedule_validation(prefs_dir):
     with pytest.raises(ValueError):  # 超出窗口数上限
         preferences.set_webhook_push_schedule(
             False, [], [win] * (preferences.WEBHOOK_PUSH_MAX_WINDOWS + 1))
+    with pytest.raises(ValueError):  # 分享页地址非 http(s)
+        preferences.set_webhook_push_schedule(
+            False, [], [win], share_base_url="ftp://x")
     # 白名单外渠道过滤, 保序去重; 多窗上限内保存成功, 各窗独立间隔
     multi = preferences.set_webhook_push_schedule(
         True, ["kol", "bad", "kol", "feishu"],
@@ -502,8 +522,12 @@ def test_render_board_markdown_units():
         },
         "alerts": {"alerts": [{"message": "涨停封板: XX"}], "total": 42},
     }
-    md = push_svc.render_board_markdown(snapshot)
-    assert "**情绪评分**: 偏冷 41" in md              # 情绪评分行
+    md = push_svc.render_board_markdown(snapshot, live=_live())
+    assert "**环境** 偏强 62分" in md               # 环境值: 中文状态标签 + 综合分
+    assert "**情绪** 偏暖 71分" in md               # 情绪值: 情绪标签 + 情绪分
+    assert "情绪评分" not in md                     # 快照静态情绪评分 (偏冷 41) 不再进消息
+    # 环境行紧跟数据时间之后, 位于其他区块之前
+    assert md.index("**环境**") < md.index("**涨跌**")
     assert "上证指数 3456.78 +0.52%" in md    # 指数含点位 + 百分数涨跌幅
     assert "贵州茅台 +3.66%" in md           # 个股为小数, x100
     assert "低空经济 +2.10%(股A/股B/股C)" in md  # 概念含前三龙头
@@ -519,6 +543,15 @@ def test_render_board_markdown_units():
     assert "2板x30" in md and "股2" not in md.split("梯队")[1].split("\n")[0]
     assert "上涨率 58%" in md
     assert "涨停封板: XX" in md and "42 条" in md
+    # 配置分享页基地址 → 末尾附 /share 在线页链接 (位于最近告警之后)
+    md_link = push_svc.render_board_markdown(
+        snapshot, live={**_live(), "share_url": "http://192.168.1.10:8000/share"})
+    assert md_link.rstrip().endswith("**在线页** http://192.168.1.10:8000/share")
+    assert md_link.index("涨停封板: XX") < md_link.index("**在线页**")
+    # live 缺省 (无实时环境/情绪数据) → 对应行省略, 其余区块照常
+    md_no_live = push_svc.render_board_markdown(snapshot)
+    assert "**环境**" not in md_no_live and "**情绪**" not in md_no_live
+    assert "上证指数 3456.78 +0.52%" in md_no_live
 
 
 def test_render_board_markdown_empty_is_safe():
@@ -571,8 +604,11 @@ def test_render_board_markdown_table():
         },
         "alerts": {"alerts": [{"message": "涨停封板: XX"}], "total": 42},
     }
-    md = push_svc.render_board_markdown_table(snapshot)
-    assert "**情绪评分**: 偏冷 41" in md
+    md = push_svc.render_board_markdown_table(snapshot, live=_live())
+    assert "**环境** 偏强 62分" in md
+    assert "**情绪** 偏暖 71分" in md
+    assert "情绪评分" not in md                     # 快照静态情绪评分不再进消息
+    assert "**环境**" in md and md.index("**环境**") < md.index("**市场概览**")
     assert "**市场概览**" in md and "| 涨/平/跌 | 3200 / 500 / 1800(上涨率 58%) |" in md
     assert "**指数**" in md and "| 上证指数 | 3456.78 | +0.52% |" in md
     assert "**涨停梯队**" in md
@@ -588,17 +624,23 @@ def test_render_board_markdown_table():
     assert "| 地产 | -1.20% | — |" in md
     assert "- 涨停封板: XX" in md and "42 条" in md
     assert md.count("| ---") >= 6                 # 表格分隔行齐全
+    # 在线页链接置于表格版消息最末 (涨跌幅榜之后)
+    md_link = push_svc.render_board_markdown_table(
+        snapshot, live={**_live(), "share_url": "http://192.168.1.10:8000/share"})
+    assert md_link.rstrip().endswith("**在线页** http://192.168.1.10:8000/share")
+    assert md_link.index("**涨跌幅榜**") < md_link.index("**在线页**")
 
     assert push_svc.render_board_markdown_table({}) == "看板暂无数据"
 
 
 def test_push_now_feishu_format(prefs_dir, monkeypatch):
-    """channels 选 feishu: 地址/密钥取自「推送通知」全局配置。"""
+    """channels 选 feishu: 地址/密钥取自「推送通知」全局配置; 副标题/正文头部为实时环境+情绪两值。"""
     feishu_url = "https://open.feishu.cn/open-apis/bot/v2/hook/abc"
     preferences.set_feishu_webhook_url(feishu_url)
     preferences.set_feishu_webhook_secret("sec")
     snapshot = {"as_of": "2026-09-01", "overview": {"emotion": {"label": "回暖", "score": 62}}}
     push_svc.set_snapshot_builder(lambda state: snapshot)
+    monkeypatch.setattr(push_svc, "_live_rows", lambda state: _live())
     calls = {}
     monkeypatch.setattr(
         webhook_adapter, "send_feishu_card",
@@ -609,9 +651,9 @@ def test_push_now_feishu_format(prefs_dir, monkeypatch):
     assert result["ok"] is True
     assert calls["url"] == feishu_url
     assert calls["title"] == "市场看板快照"
-    assert "2026-09-01" in calls["subtitle"] and "回暖" in calls["subtitle"]
+    assert calls["subtitle"] == "2026-09-01 · 环境 偏强 62分 · 情绪 偏暖 71分"
     assert calls["secret"] == "sec"
-    assert "**情绪评分**: 回暖 62" in calls["body"] or "涨跌" in calls["body"]
+    assert "**环境** 偏强 62分" in calls["body"] and "**情绪** 偏暖 71分" in calls["body"]
     status = push_svc.get_push_status()
     assert status["last_ok"] is True
     assert status["last_format"] == "feishu"  # 状态记录实际使用的渠道, 便于排查格式错配
@@ -629,6 +671,7 @@ def test_push_now_wecom_format(prefs_dir, monkeypatch):
     preferences.set_wecom_webhook_url("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc")
     snapshot = {"as_of": "2026-09-01", "overview": {"emotion": {"label": "回暖", "score": 62}}}
     push_svc.set_snapshot_builder(lambda state: snapshot)
+    monkeypatch.setattr(push_svc, "_live_rows", lambda state: _live())
     calls = {}
     monkeypatch.setattr(
         webhook_adapter, "send_wecom_markdown",
@@ -638,13 +681,13 @@ def test_push_now_wecom_format(prefs_dir, monkeypatch):
     assert result["ok"] is True
     assert calls["url"].startswith("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc")
     assert calls["title"] == "市场看板快照"
-    assert "2026-09-01" in calls["body"] and "回暖" in calls["body"]
+    assert "2026-09-01 · 环境 偏强 62分 · 情绪 偏暖 71分" in calls["body"]
     assert push_svc.get_push_status()["last_format"] == "wecom"
 
 
 def test_push_now_kol_format(prefs_dir, monkeypatch):
     """channels 选 kol: 简化格式 {"text","title","msg_id"} + 可选飞书同款签名,
-    地址/密钥取自「推送通知」全局配置。"""
+    地址/密钥取自「推送通知」全局配置; 标题/正文头部为实时环境+情绪两值。"""
     kol_url = "https://vpush.example.com/api/kol-webhook/tok"
     preferences.set_kol_webhook_url(kol_url)
     preferences.set_kol_webhook_secret("sec")
@@ -655,6 +698,7 @@ def test_push_now_kol_format(prefs_dir, monkeypatch):
         "alerts": {"alerts": [], "total": 0},
     }
     push_svc.set_snapshot_builder(lambda state: snapshot)
+    monkeypatch.setattr(push_svc, "_live_rows", lambda state: _live())
     calls = {}
     monkeypatch.setattr(
         webhook_adapter, "send_generic_webhook",
@@ -665,8 +709,8 @@ def test_push_now_kol_format(prefs_dir, monkeypatch):
     assert result["ok"] is True
     assert calls["url"] == kol_url
     body = calls["payload"]
-    assert body["title"].startswith("市场看板快照 2026-09-01")
-    assert "回暖" in body["title"]
+    assert body["title"] == "市场看板快照 2026-09-01 · 环境 偏强 62分 · 情绪 偏暖 71分"
+    assert "**环境** 偏强 62分" in body["text"] and "**情绪** 偏暖 71分" in body["text"]
     assert "**市场概览**" in body["text"]        # markdown 表格版摘要
     assert "| 涨/平/跌 |" in body["text"]
     assert body["msg_id"] == "tickflow-board-2026-09-01-1035"  # 幂等键: 交易日+触发分钟
@@ -684,6 +728,27 @@ def test_push_now_kol_format(prefs_dir, monkeypatch):
     assert "timestamp" not in body2 and "sign" not in body2
     assert body2["msg_id"] == "tickflow-board-2026-09-01-1035"
     assert push_svc.get_push_status()["last_format"] == "kol"
+
+
+def test_push_now_share_url_appended_from_cfg(prefs_dir, monkeypatch):
+    """cfg.share_base_url → 消息末尾附 /share 二合一在线页链接; 未配置则不附。"""
+    preferences.set_kol_webhook_url("https://vpush.example.com/api/kol-webhook/tok")
+    push_svc.set_snapshot_builder(lambda state: {
+        "as_of": "2026-09-01", "generated_at": "2026-09-01T10:35:00+08:00",
+        "overview": {}, "alerts": {"alerts": [], "total": 0}})
+    monkeypatch.setattr(push_svc, "_live_rows", lambda state: _live())
+    calls: dict = {}
+    monkeypatch.setattr(
+        webhook_adapter, "send_generic_webhook",
+        lambda url, payload: calls.update(payload=payload) or (True, "HTTP 200"),
+    )
+    push_svc.push_now(object(), cfg=_cfg(share_base_url="http://192.168.1.10:8000/"))
+    text = calls["payload"]["text"]
+    assert text.rstrip().endswith("**在线页** http://192.168.1.10:8000/share")
+    # 未配置分享页基地址 → 不附在线页链接 (不伪造地址)
+    calls.clear()
+    push_svc.push_now(object(), cfg=_cfg())
+    assert "在线页" not in calls["payload"]["text"]
 
 
 def test_push_now_multi_channel_and_unconfigured(prefs_dir, monkeypatch):
@@ -774,6 +839,7 @@ def test_settings_api_webhook_push_schedule_roundtrip(prefs_dir):
             enabled=True, channels=["feishu", "kol"],
             windows=[{"start_time": "09:15", "end_time": "11:35", "interval_minutes": 10},
                      {"start_time": "13:05", "end_time": "15:05", "interval_minutes": 20}],
+            share_base_url="http://192.168.1.10:8000",
         ))
     body = saved["webhook_push_schedule"]
     assert body["enabled"] is True
@@ -782,10 +848,12 @@ def test_settings_api_webhook_push_schedule_roundtrip(prefs_dir):
                                   "interval_minutes": 10}
     assert body["windows"][1] == {"start_time": "13:05", "end_time": "15:05",
                                   "interval_minutes": 20}
+    assert body["share_base_url"] == "http://192.168.1.10:8000"
 
     prefs = settings_api.get_preferences()
     assert prefs["webhook_push_schedule"]["channels"] == body["channels"]
     assert prefs["webhook_push_schedule"]["windows"] == body["windows"]
+    assert prefs["webhook_push_schedule"]["share_base_url"] == body["share_base_url"]
 
     with pytest.raises(HTTPException) as ei:  # 启用但未选平台
         settings_api.update_webhook_push_schedule(
@@ -794,6 +862,15 @@ def test_settings_api_webhook_push_schedule_roundtrip(prefs_dir):
                 windows=[{"start_time": "09:30", "end_time": "11:30",
                           "interval_minutes": 5}]))
     assert ei.value.status_code == 400
+
+    with pytest.raises(HTTPException) as ei_url:  # 分享页地址非 http(s)
+        settings_api.update_webhook_push_schedule(
+            settings_api.WebhookPushScheduleIn(
+                enabled=False, channels=["feishu"],
+                windows=[{"start_time": "09:30", "end_time": "11:30",
+                          "interval_minutes": 5}],
+                share_base_url="notaurl"))
+    assert ei_url.value.status_code == 400
 
     with pytest.raises(HTTPException) as ei2:  # 窗口倒置
         settings_api.update_webhook_push_schedule(

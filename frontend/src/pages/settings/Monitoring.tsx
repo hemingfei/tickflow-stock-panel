@@ -120,6 +120,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
   const [pushWindowsDraft, setPushWindowsDraft] = useState<WebhookPushWindow[]>([
     { start_time: '09:30', end_time: '11:30', interval_minutes: 5 },
   ])
+  const [pushShareUrlDraft, setPushShareUrlDraft] = useState('')
   const [pushError, setPushError] = useState('')
   useEffect(() => {
     setPushEnabledDraft(pushSched?.enabled ?? false)
@@ -130,6 +131,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
         ? windows.map(w => ({ ...w }))
         : [{ start_time: '09:30', end_time: '11:30', interval_minutes: 5 }],
     )
+    setPushShareUrlDraft(pushSched?.share_base_url ?? '')
   }, [pushSched])
   const pushStatus = useQuery({
     queryKey: QK.webhookPushStatus,
@@ -269,7 +271,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
 
   // ===== 看板快照定时推送 =====
   const savePushSchedule = useMutation({
-    mutationFn: (cfg: { enabled: boolean; channels: string[]; windows: WebhookPushWindow[] }) =>
+    mutationFn: (cfg: { enabled: boolean; channels: string[]; windows: WebhookPushWindow[]; share_base_url: string }) =>
       api.updateWebhookPushSchedule(cfg),
     onSuccess: () => {
       setPushError('')
@@ -298,6 +300,11 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
       setPushError('启用前请至少勾选一个推送平台 (并确认对应渠道已在「推送通知」中配置)')
       return
     }
+    const shareUrl = pushShareUrlDraft.trim().replace(/\/+$/, '')
+    if (shareUrl && !/^https?:\/\//.test(shareUrl)) {
+      setPushError('分享页外部地址需以 http:// 或 https:// 开头 (如 http://192.168.1.10:8000)')
+      return
+    }
     const windows: WebhookPushWindow[] = []
     for (let i = 0; i < pushWindowsDraft.length; i++) {
       const w = pushWindowsDraft[i]
@@ -322,8 +329,9 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
       enabled: pushEnabledDraft,
       channels: pushChannelsDraft,
       windows,
+      share_base_url: shareUrl,
     })
-  }, [pushChannelsDraft, pushWindowsDraft, pushEnabledDraft, savePushSchedule])
+  }, [pushChannelsDraft, pushWindowsDraft, pushEnabledDraft, pushShareUrlDraft, savePushSchedule])
   const testPush = useMutation({
     mutationFn: (draft: { channels?: string[]; webhook_url?: string }) =>
       api.testWebhookPush(draft),
@@ -973,6 +981,7 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
             在多个时间窗内按各自间隔推送「市场看板」快照: <b className="text-foreground/80">飞书</b>发卡片摘要、
             <b className="text-foreground/80"> 企业微信</b>发 markdown 摘要、
             <b className="text-foreground/80"> KOL Webhook</b> 发简化格式 (&#123;"text","title","msg_id"&#125;, 兼容 vpush 系统大V接入)。
+            消息头部为「实时环境情绪」页的两项实时值 (环境综合分 + 情绪分), 配置了分享页外部地址时末尾附 /share 二合一在线页链接。
             发送地址复用「<b className="text-foreground/80">推送通知</b>」中已配置的渠道, 这里只需勾选平台;
             仅周一至周五触发, 触发时刻为 各窗口开始时间 + N×间隔 (北京时间, N≥1 —— 开始时刻只作为计时起点, 本身不推送);
             时间窗可增删, 至少保留 1 个。「测试推送」按当前勾选的平台发送, 无需先保存本卡片。
@@ -1012,6 +1021,22 @@ export function SettingsMonitoringPanel({ highlight }: { highlight?: string } = 
                 </button>
               ))}
             </div>
+
+            {/* 分享页外部基地址: 推送消息用它拼 /share 二合一在线页链接 */}
+            <label className="block space-y-1.5">
+              <span className="text-[11px] text-muted">分享页外部地址 (可选)</span>
+              <input
+                type="text"
+                value={pushShareUrlDraft}
+                onChange={e => setPushShareUrlDraft(e.target.value)}
+                placeholder="http://192.168.1.10:8000"
+                disabled={savePushSchedule.isPending}
+                className="h-9 w-full rounded-btn border border-border bg-base px-2 text-xs text-foreground focus:outline-none focus:border-accent/50 disabled:opacity-50"
+              />
+              <span className="text-[10px] text-muted">
+                填写外部访问本系统的基地址后, 推送消息末尾会附 /share 二合一在线页 (看板回放 + 实时环境情绪) 链接; 留空则不附
+              </span>
+            </label>
 
             <div className="space-y-2">
               {pushWindowsDraft.map((w, i) => (
