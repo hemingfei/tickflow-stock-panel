@@ -16,6 +16,7 @@ import { useChartTheme } from '@/lib/theme'
 import { toast } from '@/components/Toast'
 import { cn } from '@/lib/cn'
 import { DatePicker } from '@/components/DatePicker'
+import { DateStepper } from '@/components/DateStepper'
 
 /** 环境标签颜色映射 */
 const REGIME_LABEL_COLORS: Record<string, string> = {
@@ -334,6 +335,7 @@ export function IntradayRegime() {
               placeholder="选择日期"
               enabledDates={dates.data?.dates}
             />
+            <DateStepper value={selectedDate || ''} dates={dates.data?.dates ?? []} onChange={(d) => setSelectedDate(d)} />
             
             {/* 如果选择了日期，添加清除按钮 */}
             {selectedDate && (
@@ -415,7 +417,11 @@ export function IntradayRegime() {
               </>
             ) : (
               <div className="flex flex-1 items-center justify-center rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-                {history.isLoading ? '加载中…' : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
+                {history.isLoading
+                  ? '加载中…'
+                  : selectedDate
+                    ? `${selectedDate} 暂无环境数据，可用 ‹ › 切换其他日期`
+                    : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
               </div>
             )}
           </div>

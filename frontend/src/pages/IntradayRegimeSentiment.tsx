@@ -9,6 +9,7 @@
  *     无「立即更新」按钮 (compute 计算入口不公开), 数据靠 30s/60s 轮询保持实时。
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import {
@@ -23,6 +24,7 @@ import { useChartTheme } from '@/lib/theme'
 import { toast } from '@/components/Toast'
 import { cn } from '@/lib/cn'
 import { DatePicker } from '@/components/DatePicker'
+import { DateStepper } from '@/components/DateStepper'
 
 /** 环境标签颜色映射 */
 const REGIME_LABEL_COLORS: Record<string, string> = {
@@ -130,8 +132,21 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
   const isPublic = variant === 'public'
   const qc = useQueryClient()
   const [hoverLabel, setHoverLabel] = useState<string | null>(null)
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  // 选中日期与 URL ?date= 双向同步 (replace 不产生历史记录): 历史回溯可复制链接直达,
+  // 与回放页 / 合并页另一页签共享同一参数 —— 切页签自动对齐到同一天
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [selectedDate, setSelectedDate] = useState<string | null>(() => searchParams.get('date'))
   const ct = useChartTheme()
+
+  // 选中日期变化写回 URL (在既有参数上改写, 保留 tab/time 等外层参数)
+  useEffect(() => {
+    const current = searchParams.get('date')
+    if ((selectedDate ?? '') === (current ?? '')) return
+    const next = new URLSearchParams(searchParams)
+    if (selectedDate) next.set('date', selectedDate)
+    else next.delete('date')
+    setSearchParams(next, { replace: true })
+  }, [selectedDate, searchParams, setSearchParams])
 
   // 查询可用日期 (两个板块各自维护, 取交集保证所选日期两侧都有数据)
   const envDates = useQuery({
@@ -583,7 +598,7 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
           <h1 className="text-base font-semibold text-foreground">实时环境情绪</h1>
           <span className="text-xs text-muted">分钟级环境 & 情绪分时 · 实时更新</span>
 
-          {/* 日期选择器 */}
+          {/* 日期选择器 + 上/下一日快退快进 (历史回溯) */}
           <div className="flex items-center gap-2 ml-auto">
             <DatePicker
               value={selectedDate || ''}
@@ -591,6 +606,7 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
               placeholder="选择日期"
               enabledDates={enabledDates}
             />
+            <DateStepper value={selectedDate || ''} dates={enabledDates ?? []} onChange={(d) => setSelectedDate(d)} />
 
             {/* 如果选择了日期，添加清除按钮 */}
             {selectedDate && (
@@ -676,7 +692,13 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
                 </>
               ) : (
                 <div className="flex flex-1 items-center justify-center rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-                  {envHistory.isLoading ? '加载中…' : isPublic ? '暂无实时环境数据，请在交易时段查看' : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
+                  {envHistory.isLoading
+                    ? '加载中…'
+                    : selectedDate
+                      ? `${selectedDate} 暂无环境数据，可用 ‹ › 切换其他日期`
+                      : isPublic
+                        ? '暂无实时环境数据，请在交易时段查看'
+                        : '暂无实时环境数据，请等待交易时段或点击「立即更新」'}
                 </div>
               )}
             </div>
@@ -746,7 +768,13 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
                 </>
               ) : (
                 <div className="flex flex-1 items-center justify-center rounded-card border border-dashed border-border p-8 text-center text-sm text-muted">
-                  {sentHistory.isLoading ? '加载中…' : isPublic ? '暂无实时情绪数据，请在交易时段查看' : '暂无实时情绪数据，请等待交易时段或点击「立即更新」'}
+                  {sentHistory.isLoading
+                    ? '加载中…'
+                    : selectedDate
+                      ? `${selectedDate} 暂无情绪数据，可用 ‹ › 切换其他日期`
+                      : isPublic
+                        ? '暂无实时情绪数据，请在交易时段查看'
+                        : '暂无实时情绪数据，请等待交易时段或点击「立即更新」'}
                 </div>
               )}
             </div>

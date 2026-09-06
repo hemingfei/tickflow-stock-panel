@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Gauge, History, Loader2, TimerOff } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
+import { DateStepper } from '@/components/DateStepper'
 import { EmptyState } from '@/components/EmptyState'
 import { api } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
@@ -176,6 +177,7 @@ export function BoardReplay({ variant = 'internal' }: { variant?: 'internal' | '
 
         <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
           <DatePicker value={date} onChange={setDate} enabledDates={dates} className="w-32" />
+          <DateStepper value={date} dates={dates} onChange={setDate} />
           <div className="flex min-w-[260px] max-w-xl flex-1 items-center gap-1.5">
             <button
               onClick={() => stepNode(-1)}
