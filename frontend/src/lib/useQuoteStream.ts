@@ -1,12 +1,13 @@
 import { useEffect, useRef, useCallback, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { SSE_INVALIDATE_PREFIXES, QK } from './queryKeys'
+import { klineDailyLatestQueryOptions, mergeLatestKlineRow } from './kline'
 import { getQueryConfig } from './useQueryConfig'
 import { cnTodayStr } from './format'
 import { toast } from '@/components/Toast'
 import { pushAlertToasts } from '@/components/AlertToast'
 import { feedReviewEvent } from './reviewStore'
-import type { StrategyAlertEvent } from './api'
+import type { KlineDailyResponse, StrategyAlertEvent } from './api'
 
 // 历史日期查询不随行情 SSE 失效: 历史聚合不会变, 每 tick 重取纯属浪费
 // (limit-ladder 历史日期后端还会走 parquet 慢路径全量重算)。
@@ -58,8 +59,8 @@ export function useQuoteStreamStatus(): QuoteStreamStatus {
 }
 
 // ===== 焦点股票注册表 (个股对话框用) =====
-// 个股对话框打开时注册当前 symbol, SSE quotes_updated 推送时精准 invalidate
-// 该 symbol 的日K查询 (['kline', symbol]), 让日K最后一根蜡烛随实时价变化。
+// 个股对话框打开时注册当前 symbol, SSE quotes_updated 推送时只取当日最新行，
+// 再原位更新该 symbol 的日K查询缓存，避免重复下载整段历史。
 // 不加进 SSE_INVALIDATE_PREFIXES 全局列表 —— 避免回测弹窗等也每秒重拉。
 let _focusSymbol: string | null = null
 
@@ -174,10 +175,25 @@ export function useQuoteStream(
               ),
           })
         }
-        // 焦点股票日K精准刷新: 个股对话框打开时, 日K最后一根蜡烛随实时价变化。
-        // 后端 _maybe_inject_live_candle 只读内存缓存, 不调 TickFlow, 秒级重拉零额外成本。
+        // 焦点股票日K增量刷新: 只取内存中的当日行并合并缓存尾部。
         if (_focusSymbol) {
-          qc.invalidateQueries({ queryKey: ['kline', _focusSymbol] })
+          const symbol = _focusSymbol
+          void qc.fetchQuery({ ...klineDailyLatestQueryOptions(symbol), staleTime: 0 })
+            .then((latest) => {
+              if (_focusSymbol !== symbol || !latest.row) return
+              const latestDate = String(latest.row.date).slice(0, 10)
+              const queries = qc.getQueryCache().findAll({ queryKey: ['kline', symbol] })
+              for (const query of queries) {
+                const start = String(query.queryKey[2] ?? '')
+                const end = String(query.queryKey[3] ?? '')
+                if (latestDate < start || latestDate > end) continue
+                qc.setQueryData<KlineDailyResponse>(
+                  query.queryKey,
+                  current => mergeLatestKlineRow(current, latest),
+                )
+              }
+            })
+            .catch(() => {})
         }
       })
 

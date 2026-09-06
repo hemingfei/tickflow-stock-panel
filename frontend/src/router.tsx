@@ -1,5 +1,5 @@
 import { lazy } from 'react'
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useSearchParams } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { Onboarding } from './pages/Onboarding'
 import { Auth } from './pages/Auth'
@@ -19,10 +19,11 @@ const Watchlist = lazy(() => import('./pages/Watchlist').then(m => ({ default: m
 const WatchlistGroups = lazy(() => import('./pages/WatchlistGroups').then(m => ({ default: m.WatchlistGroups })))
 const Screener = lazy(() => import('./pages/Screener').then(m => ({ default: m.Screener })))
 const Backtest = lazy(() => import('./pages/Backtest').then(m => ({ default: m.Backtest })))
-const Mining = lazy(() => import('./pages/Mining').then(m => ({ default: m.Mining })))
+const Factors = lazy(() => import('./pages/Factors').then(m => ({ default: m.Factors })))
 const Financials = lazy(() => import('./pages/Financials').then(m => ({ default: m.Financials })))
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
+const Lots = lazy(() => import('./pages/Lots').then(m => ({ default: m.Lots })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
 const BoardReplay = lazy(() => import('./pages/BoardReplay').then(m => ({ default: m.BoardReplay })))
 // 免登录公开回放页: 无应用外壳, 与站内回溯共用组件 (后端剥离个人告警)
@@ -31,6 +32,7 @@ const AnalysisDetail = lazy(() => import('./pages/AnalysisDetail').then(m => ({ 
 const ConceptAnalysis = lazy(() => import('./pages/ConceptAnalysis').then(m => ({ default: m.ConceptAnalysis })))
 const IndustryAnalysis = lazy(() => import('./pages/IndustryAnalysis').then(m => ({ default: m.IndustryAnalysis })))
 const StockAnalysis = lazy(() => import('./pages/StockAnalysis').then(m => ({ default: m.StockAnalysis })))
+const Signals = lazy(() => import('./pages/Signals').then(m => ({ default: m.Signals })))
 const Review = lazy(() => import('./pages/Review').then(m => ({ default: m.Review })))
 const LimitUpLadder = lazy(() => import('./pages/LimitUpLadder').then(m => ({ default: m.LimitUpLadder })))
 const Indices = lazy(() => import('./pages/Indices').then(m => ({ default: m.Indices })))
@@ -67,6 +69,7 @@ const CORE_ROUTE_PATHS = new Set([
   '/watchlist',
   '/screener',
   '/backtest',
+  '/factors',
   '/mining',
   '/financials',
   '/data',
@@ -94,6 +97,13 @@ const frontendExtensionRoutes = getFrontendExtensionRoutes()
 const frontendExtensionErrors = getFrontendExtensionLoadErrors()
 if (frontendExtensionErrors.length > 0) {
   console.error('部分前端扩展加载失败', frontendExtensionErrors)
+}
+
+// 旧链接兼容: 挖掘已并入因子页 (/factors?tab=mining), 保留 run/candidate 等参数重定向
+function MiningRedirect() {
+  const [searchParams] = useSearchParams()
+  const search = searchParams.toString()
+  return <Navigate to={`/factors?tab=mining${search ? `&${search}` : ''}`} replace />
 }
 
 // 首次使用守卫 —— 未完成向导则重定向到 /onboarding
@@ -163,10 +173,13 @@ export const router = createBrowserRouter([
       { path: 'watchlist-groups', element: <WatchlistGroups /> },
       { path: 'screener', element: <Screener /> },
       { path: 'backtest', element: <Backtest /> },
-      { path: 'mining', element: <Mining /> },
+      { path: 'factors', element: <Factors /> },
+      { path: 'mining', element: <MiningRedirect /> },
       { path: 'financials', element: <Financials /> },
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
+      { path: 'lots', element: <Lots /> },
+      { path: 'signals', element: <Signals /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },
       { path: 'regime', element: <Regime /> },
