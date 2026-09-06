@@ -119,7 +119,8 @@ def should_push_now(now: datetime, cfg: dict) -> bool:
 
     每个窗口按自己的开始时间与间隔对齐 (开始 + N*间隔, N>=1, 开始本身不推送);
     周一~周五限制与现有交易时段判断 (intraday_sentiment.is_trading_time 等)
-    口径一致; 项目无交易日历, 节假日靠快照数据自说明, 不做特殊处理。
+    口径一致。交易日历门控 (节假日不推) 在 run_due_push 中, 与快照落盘同语义;
+    本函数保持纯时间判断, 不做探测。
     配置字段缺失/非法时返回 False (fail-closed), 不抛异常。
     """
     if not cfg.get("enabled"):
@@ -748,7 +749,8 @@ def push_now(app_state: Any, webhook_url: str | None = None, cfg: dict | None = 
         else:  # generic: 显式地址原样 POST
             ok, send_detail = send_generic_webhook(url, snapshot)
         ok_all = ok_all and ok
-        detail = f"{send_detail} · {len(body)} 字节"
+        # 字节数仅 generic 渠道有意义 (原样 POST 快照 JSON); 渲染渠道发送的是渲染后文本
+        detail = f"{send_detail} · {len(body)} 字节" if ch == "generic" else send_detail
         details.append(detail)
         _record_push_result(ok, detail, as_of, int((time.monotonic() - started) * 1000), ch)
         if not ok:
@@ -761,6 +763,10 @@ def push_now(app_state: Any, webhook_url: str | None = None, cfg: dict | None = 
 def run_due_push(app_state: Any, now: datetime | None = None) -> dict | None:
     """定时 job 的同步执行体: 到点才推送, 未到点/禁用/同分钟重复一律跳过。
 
+    交易日历门控 (fail-open): 工作日但休市 (节假日) 时不推送, 避免把陈旧
+    看板数据推给订阅方; 日历探测不可用 (None) 时按工作日近似继续,
+    与 board_snapshot_store 落盘门控同语义。
+
     Returns:
         推送结果 dict; 本轮未触发时为 None。
     """
@@ -770,6 +776,14 @@ def run_due_push(app_state: Any, now: datetime | None = None) -> dict | None:
     cfg = preferences.get_webhook_push_schedule()
     if not should_push_now(now, cfg):
         return None
+
+    try:
+        from app.services import trading_day
+
+        if trading_day.is_trading_day(now) is False:
+            return None
+    except Exception:  # noqa: BLE001
+        pass
 
     minute_key = now.strftime("%Y-%m-%d %H:%M")
     with _status_lock:

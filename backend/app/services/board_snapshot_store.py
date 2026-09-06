@@ -251,7 +251,10 @@ def reset_record_state() -> None:
 def run_due_record(app_state: Any, now: datetime | None = None) -> dict | None:
     """定时 job 的同步执行体: 到刻度才落盘, 未到点/同分钟重复一律跳过。
 
-    构建或写盘失败只记警告, 不向调度器抛异常 (下一次刻度会再试)。
+    交易日历门控: 工作日但休市 (节假日) 时不落盘, 避免回溯页混入整天
+    内容相同的陈旧快照; 日历探测不可用 (None) 时按工作日近似继续, 不阻断。
+    构建或写盘失败只记警告并回滚去重标记 (同分钟 misfire 可补跑重试),
+    不向调度器抛异常 (下一次刻度会再试)。
 
     Returns:
         record_snapshot 的结果 dict; 本轮未触发时为 None。
@@ -259,6 +262,15 @@ def run_due_record(app_state: Any, now: datetime | None = None) -> dict | None:
     now = now or cn_now()
     if not is_aligned_record_tick(now):
         return None
+
+    # 交易日历 (fail-open): 探测失败/未知 → 维持工作日近似, 与 quote_service/minute_refresh 同语义
+    try:
+        from app.services import trading_day
+
+        if trading_day.is_trading_day(now) is False:
+            return None
+    except Exception:  # noqa: BLE001
+        pass
 
     minute_key = now.strftime("%Y-%m-%d %H:%M")
     with _record_lock:
@@ -269,8 +281,11 @@ def run_due_record(app_state: Any, now: datetime | None = None) -> dict | None:
 
     try:
         result = record_snapshot(app_state, now=now)
-    except Exception as e:  # 落盘失败不阻塞调度器
+    except Exception as e:  # 落盘失败不阻塞调度器; 回滚标记让同分钟补跑可重试
         logger.warning("看板快照落盘失败 (%s %s): %s", now.strftime("%Y-%m-%d"), now.strftime("%H:%M"), e)
+        with _record_lock:
+            if _last_record_minute == minute_key:
+                _last_record_minute = None
         return None
     logger.info(
         "看板快照已落盘 %s %s (%s 字节, as_of=%s)",

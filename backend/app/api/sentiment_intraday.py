@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from app.market_time import cn_now
 from app.services.intraday_sentiment import (
     INTRADAY_SENTIMENT_DIR,
     get_intraday_sentiment_service,
     is_trading_time,
-    should_record_now,
-    load_intraday_sentiment,
 )
 
 router = APIRouter(prefix="/api/sentiment/intraday", tags=["sentiment-intraday"])
@@ -42,7 +40,7 @@ def intraday_sentiment_history(request: Request, target_date: date | None = Quer
 @router.get("/status")
 def intraday_sentiment_status(request: Request):
     """获取实时情绪服务状态。"""
-    now = datetime.now()
+    now = cn_now()
     trading = is_trading_time(now)
     return {
         "trading_time": trading,

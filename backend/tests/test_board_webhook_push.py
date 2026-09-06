@@ -32,6 +32,15 @@ def prefs_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_calendar_probe(monkeypatch):
+    """推送单测不触发真实交易日历探测链 (有网络开销): 按未知 (None) 处理,
+    维持工作日近似; 节假日行为由 test_run_due_push_skips_holidays 单测覆盖。"""
+    from app.services import trading_day
+
+    monkeypatch.setattr(trading_day, "is_trading_day", lambda now=None: None)
+
+
+@pytest.fixture(autouse=True)
 def _reset_push_state():
     """推送状态是模块级内存态, 测试间必须复位。"""
     push_svc.set_snapshot_builder(None)
@@ -455,6 +464,27 @@ def test_run_due_push_sends_snapshot_on_aligned_tick(prefs_dir, monkeypatch):
     assert status["last_as_of"] == "2026-09-01"
     assert status["last_success_at"] is not None
     assert status["last_format"] == "kol"
+
+
+def test_run_due_push_skips_holidays(prefs_dir, monkeypatch):
+    """工作日但休市 (节假日) 不推送, 避免把陈旧看板数据推给订阅方;
+    日历未知 (None) 时按工作日近似继续推送。"""
+    from app.services import trading_day
+
+    preferences.set_webhook_push_schedule(
+        True, ["kol"],
+        [{"start_time": "09:30", "end_time": "15:00", "interval_minutes": 5}])
+    preferences.set_kol_webhook_url("https://vpush.example.com/api/kol-webhook/tok")
+    builder_calls = []
+    push_svc.set_snapshot_builder(lambda state: builder_calls.append(state) or {})
+
+    monkeypatch.setattr(trading_day, "is_trading_day", lambda now=None: False)
+    assert push_svc.run_due_push(object(), now=datetime(2026, 10, 1, 9, 35)) is None
+    assert builder_calls == []
+
+    monkeypatch.setattr(trading_day, "is_trading_day", lambda now=None: None)
+    assert push_svc.run_due_push(object(), now=datetime(2026, 10, 1, 9, 35)) is not None
+    assert len(builder_calls) == 1
 
 
 def test_run_due_push_dedupes_same_minute(prefs_dir, monkeypatch):

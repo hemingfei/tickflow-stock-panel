@@ -13,21 +13,19 @@
 from __future__ import annotations
 
 import logging
-import math
-import re
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
 
 import polars as pl
 
+from app.market_time import cn_today
+from app.parquet import scan_enriched_parquet
 from app.services.market_overview_builder import (
-    _score,
+    CORE_INDEX_SYMBOLS,
     _dimension_rank,
     _finite,
-    CORE_INDEX_SYMBOLS,
+    compute_emotion_scores,
 )
-from app.parquet import scan_enriched_parquet
 
 logger = logging.getLogger(__name__)
 
@@ -55,77 +53,12 @@ def _load_index_pct_map(repo, start: date, end: date) -> dict:
 def _compute_sentiment_scores(metrics: dict) -> dict:
     """计算 6 个子维度分 + 总情绪分 + 情绪标签。
 
-    完全复用 market_overview_builder 的评分逻辑, 权重和归一化区间完全一致。
+    委托 market_overview_builder.compute_emotion_scores 单一来源 (看板 radar
+    同一函数), 权重/归一化区间/标签阈值不再各自维护, 消除漂移风险。
 
-    metrics 期望字段(由 _aggregate_daily 聚合):
-      avg_index_pct(百分比), up_pct, avg_pct(小数), median_pct(小数), strong_diff_pct,
-      avg_vol_ratio, high_vol_pct, limit_up, seal_rate, max_boards,
-      tier2_count, down_pct, strong_down_pct, mainline_avg(小数), mainline_cover_pct
+    metrics 期望字段见 compute_emotion_scores docstring。
     """
-    # 指数维度
-    index_score = _score(metrics.get("avg_index_pct", 0), -2.5, 2.5)
-
-    # 赚钱维度 - 与看板完全一致
-    profit_score = round(
-        _score(metrics.get("up_pct", 50), 20, 80) * 0.45 +
-        _score(metrics.get("avg_pct", 0), -0.02, 0.02) * 0.25 +
-        _score(metrics.get("median_pct", 0), -0.02, 0.02) * 0.20 +
-        _score(metrics.get("strong_diff_pct", 0), -8, 8) * 0.10
-    )
-
-    # 量能维度
-    money_score = round(
-        _score(metrics.get("avg_vol_ratio", 1), 0.6, 1.8) * 0.70 +
-        _score(metrics.get("high_vol_pct", 5), 2, 12) * 0.30
-    )
-
-    # 投机维度
-    speculation_score = round(
-        _score(metrics.get("limit_up", 0), 5, 90) * 0.25 +
-        _score(metrics.get("seal_rate", 50), 30, 85) * 0.35 +
-        _score(metrics.get("max_boards", 0), 1, 8) * 0.25 +
-        _score(metrics.get("tier2_count", 0), 0, 30) * 0.15
-    )
-
-    # 抗跌维度
-    resilience_score = 100 - round(
-        _score(metrics.get("down_pct", 50), 20, 80) * 0.55 +
-        _score(metrics.get("strong_down_pct", 5), 1, 12) * 0.45
-    )
-
-    # 主线维度
-    mainline_score = round(
-        _score(metrics.get("mainline_avg", 0), -0.005, 0.03) * 0.65 +
-        _score(metrics.get("mainline_cover_pct", 0), 1, 12) * 0.35
-    ) if metrics.get("mainline_avg") is not None else 50
-
-    # 总情绪分(6 维度简单平均)
-    emotion_score = round(
-        (index_score + profit_score + money_score + speculation_score + resilience_score + mainline_score) / 6
-    )
-
-    # 情绪标签 - 与看板完全一致
-    if emotion_score >= 70:
-        emotion_label = "强势"
-    elif emotion_score >= 55:
-        emotion_label = "偏暖"
-    elif emotion_score >= 45:
-        emotion_label = "震荡"
-    elif emotion_score >= 30:
-        emotion_label = "偏冷"
-    else:
-        emotion_label = "冰点"
-
-    return {
-        "index_score": index_score,
-        "profit_score": profit_score,
-        "money_score": money_score,
-        "speculation_score": speculation_score,
-        "resilience_score": resilience_score,
-        "mainline_score": mainline_score,
-        "emotion_score": emotion_score,
-        "emotion_label": emotion_label,
-    }
+    return compute_emotion_scores(metrics)
 
 
 def _load_and_compute_full_enriched(repo, start: date, end: date):
@@ -133,12 +66,12 @@ def _load_and_compute_full_enriched(repo, start: date, end: date):
     性能优化版：一次性加载从 start-150 到 end 的所有数据，计算完整指标。
     与看板数据加载方式完全一致。
     """
-    from app.tickflow.repository import enriched_dirname
     from app.indicators.pipeline import (
         compute_indicators,
         compute_limit_signals,
         compute_signals,
     )
+    from app.tickflow.repository import enriched_dirname
 
     # 加载范围：start前推150天作为warmup
     load_start = start - timedelta(days=150)
@@ -291,7 +224,9 @@ def _aggregate_single_day(repo, target_date: date, df_day: pl.DataFrame, index_p
         "tier2_count": tier2_count,
         "down_pct": down_pct,
         "strong_down_pct": strong_down_pct,
-        "mainline_avg": mainline_avg,
+        # 无主线成分时传 None → 主线维 50 分 (与看板 mainline_items 空档语义一致;
+        # 此前传 0.0 会被算成 ~9 分, 与看板漂移)
+        "mainline_avg": mainline_avg if mainline_items else None,
         "mainline_cover_pct": mainline_cover_pct,
     }
 
@@ -457,7 +392,7 @@ def detect_stale_dates(data_dir: Path, repo) -> list[date]:
 
 def compute_sentiment_incremental(repo, data_dir: Path, *, today: date | None = None, depth_service=None) -> pl.DataFrame:
     """增量计算 sentiment(供 daily_pipeline / 启动补算调用)。"""
-    today = today or date.today()
+    today = today or cn_today()
     existing = load_sentiment_history(data_dir)
 
     # 缺口: enriched 有哪些天, sentiment 缺哪些

@@ -11,6 +11,14 @@ from fastapi.testclient import TestClient
 
 from app.api import board_snapshots as snapshots_api
 from app.services import board_snapshot_store as store
+from app.services import trading_day
+
+
+@pytest.fixture(autouse=True)
+def _no_calendar_probe(monkeypatch):
+    """快照单测不触发真实交易日历探测链 (有网络开销): 按未知 (None) 处理,
+    维持工作日近似; 节假日行为由 test_run_due_record_skips_holidays 单测覆盖。"""
+    monkeypatch.setattr(trading_day, "is_trading_day", lambda now=None: None)
 
 
 def _dt(y, m, d, hh, mm):
@@ -142,6 +150,45 @@ def test_run_due_record_builder_failure_is_swallowed(tmp_path):
     assert store.run_due_record(_state(tmp_path), now=_dt(2026, 9, 2, 9, 35)) is None
     # 构建失败不写文件, 也不影响同分钟之后的重试语义 (仅记警告)
     assert store.list_dates(tmp_path) == []
+
+
+def test_run_due_record_skips_holidays(tmp_path, monkeypatch):
+    """工作日但休市 (节假日) 不落盘, 避免回溯页混入整天相同的陈旧快照;
+    日历未知 (None) 时维持工作日近似继续落盘 (autouse fixture 即该语义)。"""
+    store.set_snapshot_builder(lambda state: {"as_of": "2026-10-01"})
+    state = _state(tmp_path)
+    store.reset_record_state()
+
+    monkeypatch.setattr(trading_day, "is_trading_day", lambda now=None: False)
+    assert store.run_due_record(state, now=_dt(2026, 10, 1, 9, 35)) is None
+    assert store.list_dates(tmp_path) == []
+
+    monkeypatch.setattr(trading_day, "is_trading_day", lambda now=None: None)
+    assert store.run_due_record(state, now=_dt(2026, 10, 1, 9, 35)) is not None
+    assert store.list_dates(tmp_path) == ["2026-10-01"]
+
+
+def test_run_due_record_failure_rolls_back_dedup_marker(tmp_path, monkeypatch):
+    """构建失败回滚同分钟去重标记: 同分钟的 misfire 补跑可以重试, 不丢刻度。"""
+    calls = {"n": 0}
+
+    def _flaky(state):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+        return {"as_of": "2026-09-02"}
+
+    store.set_snapshot_builder(_flaky)
+    state = _state(tmp_path)
+    store.reset_record_state()
+
+    assert store.run_due_record(state, now=_dt(2026, 9, 2, 9, 35)) is None
+    # 同一分钟再次 fire (misfire 补跑): 标记已回滚, 允许重试并成功
+    result = store.run_due_record(state, now=_dt(2026, 9, 2, 9, 35))
+    assert result is not None and result["time"] == "09:35"
+    assert calls["n"] == 2
+    # 成功后同分钟去重恢复
+    assert store.run_due_record(state, now=_dt(2026, 9, 2, 9, 35)) is None
 
 
 # ---------- 滚动清理 ----------

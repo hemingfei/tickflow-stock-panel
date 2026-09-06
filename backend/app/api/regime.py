@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import date
@@ -12,7 +13,10 @@ from typing import Annotated, Any
 import polars as pl
 from fastapi import APIRouter, Query, Request
 
+from app.market_time import cn_today
 from app.services import regime_builder
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/regime", tags=["regime"])
 
@@ -20,6 +24,10 @@ _CACHE_TTL = 5.0
 _cache: dict[str, Any] | None = None
 _cache_ts: float = 0.0
 _cache_lock = threading.Lock()
+
+# 重算互斥: 全量重算为分钟级耗时任务, /recompute 写 regime/mainline 同一批 parquet,
+# 并发进入会互相覆盖 (upsert 读-改-写非原子)。非阻塞获取, 已在重算时直接拒绝。
+_recompute_lock = threading.Lock()
 
 
 def invalidate_regime_cache() -> None:
@@ -148,7 +156,7 @@ def regime_recompute(request: Request, start: date | None = None, end: date | No
     """
     repo = request.app.state.repo
     data_dir = _data_dir(request)
-    end = end or date.today()
+    end = end or cn_today()
     if start is None:
         # 全量: 从 enriched 最早日强制重算到今天
         earliest = regime_builder.earliest_enriched_date(repo)
@@ -156,27 +164,34 @@ def regime_recompute(request: Request, start: date | None = None, end: date | No
             invalidate_regime_cache()
             return {"ok": True, "computed": 0}
         start = earliest
-    new_rows = regime_builder.run_regime_batch(repo, start=start, end=end)
-    if not new_rows.is_empty():
-        regime_builder.upsert_regime_history(data_dir, new_rows)
-    phase_days = regime_builder.refresh_phase_labels(data_dir)
 
-    from app.services import market_mainline
+    if not _recompute_lock.acquire(blocking=False):
+        logger.warning("regime_recompute rejected: another recompute is running")
+        return {"ok": False, "detail": "已有重算任务在进行中, 请稍后再试", "computed": 0}
+    try:
+        new_rows = regime_builder.run_regime_batch(repo, start=start, end=end)
+        if not new_rows.is_empty():
+            regime_builder.upsert_regime_history(data_dir, new_rows)
+        phase_days = regime_builder.refresh_phase_labels(data_dir)
 
-    mainline_rows = 0
-    for kind in ("concept", "industry"):
-        rows = market_mainline.compute_mainline_range(repo, data_dir, start, end, kind=kind)
-        if not rows.is_empty():
-            market_mainline.upsert_mainline_history(data_dir, rows)
-            mainline_rows += rows.height
+        from app.services import market_mainline
 
-    invalidate_regime_cache()
-    return {
-        "ok": True,
-        "computed": new_rows.height if not new_rows.is_empty() else 0,
-        "phase_days": phase_days,
-        "mainline_rows": mainline_rows,
-    }
+        mainline_rows = 0
+        for kind in ("concept", "industry"):
+            rows = market_mainline.compute_mainline_range(repo, data_dir, start, end, kind=kind)
+            if not rows.is_empty():
+                market_mainline.upsert_mainline_history(data_dir, rows)
+                mainline_rows += rows.height
+
+        invalidate_regime_cache()
+        return {
+            "ok": True,
+            "computed": new_rows.height if not new_rows.is_empty() else 0,
+            "phase_days": phase_days,
+            "mainline_rows": mainline_rows,
+        }
+    finally:
+        _recompute_lock.release()
 
 
 @router.get("/phases")
@@ -303,7 +318,7 @@ def mainline_recompute(request: Request):
     rows = 0
     for kind in ("concept", "industry"):
         computed = market_mainline.compute_mainline_range(
-            repo, data_dir, earliest, date.today(), kind=kind
+            repo, data_dir, earliest, cn_today(), kind=kind
         )
         if not computed.is_empty():
             market_mainline.upsert_mainline_history(data_dir, computed)

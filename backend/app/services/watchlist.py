@@ -17,12 +17,12 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
-from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 
 from app.config import settings
+from app.market_time import cn_now
 from app.services import watchlist_group_store as _group_store
 from app.tickflow.capabilities import Cap, CapabilitySet
 from app.tickflow.client import get_client
@@ -154,7 +154,7 @@ def _write_groups(groups: list[dict]) -> None:
             "name": g["name"],
             "color": g["color"],
             "order": i,
-            "created_at": old.get(g["id"], {}).get("created_at") or datetime.utcnow().isoformat(timespec="seconds"),
+            "created_at": old.get(g["id"], {}).get("created_at") or cn_now().isoformat(timespec="seconds"),
         }
         for i, g in enumerate(groups)
     ]
@@ -228,7 +228,7 @@ def add_batch(
                     gids.append(gid)
             rows.insert(0, {
                 "symbol": symbol,
-                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "added_at": cn_now().isoformat(timespec="seconds"),
                 "note": note,
                 "group_ids": gids,
             })
@@ -246,7 +246,7 @@ def add_batch(
                         "symbol": symbol,
                         "order": count,
                         "note": "",
-                        "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                        "added_at": cn_now().isoformat(timespec="seconds"),
                     })
                     count += 1
             _group_store.save(data)
@@ -287,7 +287,7 @@ def ensure_symbols(symbols: list[str]) -> int:
         for s in missing:
             rows.append({
                 "symbol": s,
-                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "added_at": cn_now().isoformat(timespec="seconds"),
                 "note": "",
                 "group_ids": [],
             })
@@ -413,7 +413,7 @@ def set_group(symbol: str, group_id: str | None) -> list[dict]:
                 "symbol": symbol,
                 "order": 0,
                 "note": old_notes.get(group_id, ""),
-                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "added_at": cn_now().isoformat(timespec="seconds"),
             })
         data["members"] = kept
         _group_store.save(data)
@@ -439,7 +439,7 @@ def add_to_group(symbol: str, group_id: str) -> list[dict]:
                 "symbol": symbol,
                 "order": _group_store.group_member_count(data["members"], group_id),
                 "note": "",
-                "added_at": datetime.utcnow().isoformat(timespec="seconds"),
+                "added_at": cn_now().isoformat(timespec="seconds"),
             })
             _group_store.save(data)
         out = pl.DataFrame(rows, schema=_ENTRY_SCHEMA)

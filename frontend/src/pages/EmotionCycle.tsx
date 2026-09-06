@@ -5,6 +5,7 @@
  * 不复刻 Dashboard 的当日总览, 聚焦历史趋势与 6 维度拆解。
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEChart } from '@/lib/useEChart'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import {
@@ -90,60 +91,6 @@ function isPresetKey(p: RangePreset, k: '1y' | '2y' | 'all'): boolean {
 }
 
 // ── EChart hook ───────────────────────────────────────────
-function useEChart(
-  option: echarts.EChartsOption | null,
-  deps: unknown[],
-  events?: Record<string, (params: any) => void>,
-  opts?: { notMerge?: boolean }
-) {
-  const ref = useRef<HTMLDivElement>(null)
-  const instRef = useRef<echarts.ECharts | null>(null)
-  const eventsRef = useRef<Record<string, (params: any) => void> | undefined>()
-  
-  useEffect(() => {
-    if (!ref.current) return
-    instRef.current = echarts.init(ref.current, undefined, { renderer: 'canvas' })
-    const onResize = () => instRef.current?.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      instRef.current?.dispose()
-      instRef.current = null
-    }
-  }, [])
-  
-  useEffect(() => {
-    if (!instRef.current) return
-    const inst = instRef.current
-    // 移除旧事件
-    if (eventsRef.current) {
-      Object.keys(eventsRef.current).forEach(evt => {
-        inst.off(evt)
-      })
-    }
-    // 添加新事件
-    if (events) {
-      Object.entries(events).forEach(([evt, handler]) => {
-        inst.on(evt, handler)
-      })
-    }
-    eventsRef.current = events
-  }, [events])
-  
-  useEffect(() => {
-    if (instRef.current && option) {
-      // 使用 replaceMerge 来优化更新性能，特别是对雷达图这样的图表
-      instRef.current.setOption(option, { 
-        notMerge: opts?.notMerge ?? true,
-        lazyUpdate: false
-      })
-    }
-  }, [option, ...deps])
-  
-  // 附加实例引用到 ref 对象上，方便外部访问
-  ;(ref as any).instRef = instRef
-  return ref
-}
 
 // ── 页内通用 SectionTitle (对齐 Dashboard 渐变竖条风格) ───
 function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; title: string; hint?: ReactNode }) {

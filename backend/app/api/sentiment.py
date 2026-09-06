@@ -13,6 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from app.market_time import cn_today
 from app.services import sentiment_builder
 
 router = APIRouter(prefix="/api/sentiment", tags=["sentiment"])
@@ -21,6 +22,10 @@ _CACHE_TTL = 5.0
 _cache: dict[str, Any] | None = None
 _cache_ts: float = 0.0
 _cache_lock = threading.Lock()
+
+# 重算互斥: 全量重算为分钟级耗时任务, /recompute 与 /refresh 写同一 parquet,
+# 并发进入会互相覆盖 (upsert 读-改-写非原子)。非阻塞获取, 已在重算时直接拒绝。
+_recompute_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -121,29 +126,36 @@ def sentiment_recompute(request: Request, start: date | None = None, end: date |
     """
     repo = request.app.state.repo
     data_dir = _data_dir(request)
-    end = end or date.today()
+    end = end or cn_today()
 
     depth_service = getattr(request.app.state, "depth_service", None)
 
     logger.info("sentiment_recompute called with start=%s, end=%s", start, end)
 
-    if start is None:
-        # 全量: 从 enriched 最早日强制重算到今天
-        earliest = sentiment_builder.earliest_enriched_date(repo)
-        logger.info("sentiment_recompute: earliest_enriched_date = %s", earliest)
-        if earliest is None:
-            invalidate_sentiment_cache()
-            return {"ok": True, "computed": 0}
-        start = earliest
+    if not _recompute_lock.acquire(blocking=False):
+        logger.warning("sentiment_recompute rejected: another recompute is running")
+        return {"ok": False, "detail": "已有重算任务在进行中, 请稍后再试", "computed": 0}
 
-    logger.info("sentiment_recompute: computing from %s to %s", start, end)
-    new_rows = sentiment_builder.run_sentiment_batch(repo, start=start, end=end, depth_service=depth_service)
-    logger.info("sentiment_recompute: new_rows.height = %s", new_rows.height if not new_rows.is_empty() else 0)
+    try:
+        if start is None:
+            # 全量: 从 enriched 最早日强制重算到今天
+            earliest = sentiment_builder.earliest_enriched_date(repo)
+            logger.info("sentiment_recompute: earliest_enriched_date = %s", earliest)
+            if earliest is None:
+                invalidate_sentiment_cache()
+                return {"ok": True, "computed": 0}
+            start = earliest
 
-    if not new_rows.is_empty():
-        sentiment_builder.upsert_sentiment_history(data_dir, new_rows)
-    invalidate_sentiment_cache()
-    return {"ok": True, "computed": new_rows.height if not new_rows.is_empty() else 0}
+        logger.info("sentiment_recompute: computing from %s to %s", start, end)
+        new_rows = sentiment_builder.run_sentiment_batch(repo, start=start, end=end, depth_service=depth_service)
+        logger.info("sentiment_recompute: new_rows.height = %s", new_rows.height if not new_rows.is_empty() else 0)
+
+        if not new_rows.is_empty():
+            sentiment_builder.upsert_sentiment_history(data_dir, new_rows)
+        invalidate_sentiment_cache()
+        return {"ok": True, "computed": new_rows.height if not new_rows.is_empty() else 0}
+    finally:
+        _recompute_lock.release()
 
 
 @router.post("/refresh")
@@ -153,7 +165,13 @@ def sentiment_refresh(request: Request):
     data_dir = _data_dir(request)
     depth_service = getattr(request.app.state, "depth_service", None)
     logger.info("sentiment_refresh called")
-    new_rows = sentiment_builder.compute_sentiment_incremental(repo, data_dir, depth_service=depth_service)
-    logger.info("sentiment_refresh: new_rows.height = %s", new_rows.height if not new_rows.is_empty() else 0)
-    invalidate_sentiment_cache()
-    return {"ok": True, "computed": new_rows.height if not new_rows.is_empty() else 0}
+    if not _recompute_lock.acquire(blocking=False):
+        logger.warning("sentiment_refresh rejected: another recompute is running")
+        return {"ok": False, "detail": "已有重算任务在进行中, 请稍后再试", "computed": 0}
+    try:
+        new_rows = sentiment_builder.compute_sentiment_incremental(repo, data_dir, depth_service=depth_service)
+        logger.info("sentiment_refresh: new_rows.height = %s", new_rows.height if not new_rows.is_empty() else 0)
+        invalidate_sentiment_cache()
+        return {"ok": True, "computed": new_rows.height if not new_rows.is_empty() else 0}
+    finally:
+        _recompute_lock.release()

@@ -8,6 +8,7 @@
  * 美化对齐 Dashboard 设计语言: 半透明 surface 卡片 + 渐变竖条标题 + 语义色。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEChart } from '@/lib/useEChart'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import {
@@ -85,68 +86,6 @@ function isPresetKey(p: RangePreset, k: '1y' | '2y' | 'all'): boolean {
 }
 
 // ── EChart hook ───────────────────────────────────────────
-function useEChart(
-  option: echarts.EChartsOption | null,
-  deps: unknown[],
-  onReady?: (inst: echarts.ECharts) => void,
-) {
-  const ref = useRef<HTMLDivElement>(null)
-  const instRef = useRef<echarts.ECharts | null>(null)
-  const roRef = useRef<ResizeObserver | null>(null)
-  const optionRef = useRef(option)
-  optionRef.current = option
-  useEffect(() => {
-    const onResize = () => instRef.current?.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      roRef.current?.disconnect()
-      roRef.current = null
-      instRef.current?.dispose()
-      instRef.current = null
-    }
-  }, [])
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const ensureInstance = () => {
-      if (!instRef.current) {
-        instRef.current = echarts.init(el, undefined, { renderer: 'canvas' })
-        onReady?.(instRef.current)
-      }
-      return instRef.current
-    }
-    // 容器尚未完成布局 (0×0: 首帧未排版/tab display:none) 时 init 会产生
-    // "Can't get DOM width or height" 警告且画布为空 — 挂 ResizeObserver,
-    // 等首次非零尺寸再建实例并应用 option (惰性 init 的延伸:
-    // 数据到达时 div 已挂载, 但布局可能仍未完成)。
-    if (el.clientWidth === 0 || el.clientHeight === 0) {
-      if (!roRef.current) {
-        roRef.current = new ResizeObserver(() => {
-          if (el.clientWidth === 0 || el.clientHeight === 0) return
-          roRef.current?.disconnect()
-          roRef.current = null
-          const inst = ensureInstance()
-          if (optionRef.current) {
-            inst.setOption(optionRef.current, { notMerge: true })
-            inst.resize()
-          }
-        })
-        roRef.current.observe(el)
-      }
-      return
-    }
-    const inst = ensureInstance()
-    if (option) {
-      inst.setOption(option, { notMerge: true })
-      // 容器可能经历 display:none(tab 隐藏) → 可见的切换, 画布尺寸需要按当前
-      // 容器实际尺寸重算; 调用方把 view 等显隐依赖传入 deps 以触发本 effect。
-      inst.resize()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [option, ...deps])
-  return ref
-}
 
 // ── 页内通用 SectionTitle (对齐 Dashboard 渐变竖条风格) ────
 function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; title: string; hint?: ReactNode }) {
@@ -331,7 +270,6 @@ export function Regime() {
   }, [rows])
 
 
-
   // 阶段时间轴: 高度折线 + 2板以上宽度柱 + 晋级率曲线, 背景色带=情绪周期阶段
   const phaseOption = useMemo<echarts.EChartsOption | null>(() => {
     if (rows.length === 0 || !hasPhaseData) return null
@@ -468,7 +406,7 @@ export function Regime() {
     }
   }, [rows, days, ct, hasPhaseData, selDate])
   const [phaseChartInst, setPhaseChartInst] = useState<echarts.ECharts | null>(null)
-  const phaseChartRef = useEChart(phaseOption, [phaseOption, view], setPhaseChartInst)
+  const phaseChartRef = useEChart(phaseOption, [phaseOption, view], undefined, { onReady: setPhaseChartInst })
   // 点击图表任意位置 → 选中最近的交易日 (zrender 级监听, 命中区为整个网格,
   // 不依赖细线/窄柱的精确点击); 点击图例/dataZoom 不在网格内, 自动忽略
   useEffect(() => {

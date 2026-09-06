@@ -8,7 +8,9 @@
  *   - variant="public": 免登录独立页 /sentiment, 走认证白名单 /api/public/env/* 只读端点,
  *     无「立即更新」按钮 (compute 计算入口不公开), 数据靠 30s/60s 轮询保持实时。
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEChart } from '@/lib/useEChart'
+import { QK } from '@/lib/queryKeys'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
@@ -51,60 +53,6 @@ const emotionLabelToColor = (label: string): string => EMOTION_COLORS[label] || 
 const TREND_CONNECT_GROUP = 'intraday-env-sent-trend'
 
 /** ECharts hook (group 用于多图联动) */
-function useEChart(
-  option: echarts.EChartsOption | null,
-  deps: unknown[],
-  events?: Record<string, (params: any) => void>,
-  opts?: { notMerge?: boolean; group?: string }
-) {
-  const ref = useRef<HTMLDivElement>(null)
-  const instRef = useRef<echarts.ECharts | null>(null)
-  const eventsRef = useRef<Record<string, (params: any) => void> | undefined>()
-
-  useEffect(() => {
-    if (!ref.current) return
-    instRef.current = echarts.init(ref.current, undefined, { renderer: 'canvas' })
-    if (opts?.group) {
-      instRef.current.group = opts.group
-      echarts.connect(opts.group)
-    }
-    const onResize = () => instRef.current?.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      instRef.current?.dispose()
-      instRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!instRef.current) return
-    const inst = instRef.current
-    if (eventsRef.current) {
-      Object.keys(eventsRef.current).forEach(evt => {
-        inst.off(evt)
-      })
-    }
-    if (events) {
-      Object.entries(events).forEach(([evt, handler]) => {
-        inst.on(evt, handler)
-      })
-    }
-    eventsRef.current = events
-  }, [events])
-
-  useEffect(() => {
-    if (instRef.current && option) {
-      instRef.current.setOption(option, {
-        notMerge: opts?.notMerge ?? true,
-        lazyUpdate: false
-      })
-    }
-  }, [option, ...deps])
-
-  ;(ref as any).instRef = instRef
-  return ref
-}
 
 /** 通用 SectionTitle */
 function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; title: string; hint?: ReactNode }) {
@@ -150,11 +98,11 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
 
   // 查询可用日期 (两个板块各自维护, 取交集保证所选日期两侧都有数据)
   const envDates = useQuery({
-    queryKey: [isPublic ? 'publicIntradayRegimeDates' : 'intradayRegimeDates'],
+    queryKey: isPublic ? QK.publicIntradayRegimeDates : QK.intradayRegimeDates,
     queryFn: isPublic ? api.publicEnvRegimeDates : api.intradayRegimeDates,
   })
   const sentDates = useQuery({
-    queryKey: [isPublic ? 'publicIntradaySentimentDates' : 'intradaySentimentDates'],
+    queryKey: isPublic ? QK.publicIntradaySentimentDates : QK.intradaySentimentDates,
     queryFn: isPublic ? api.publicEnvSentimentDates : api.intradaySentimentDates,
   })
   const enabledDates = useMemo(() => {
@@ -166,19 +114,19 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
 
   // 查询状态
   const envStatus = useQuery({
-    queryKey: [isPublic ? 'publicIntradayRegimeStatus' : 'intradayRegimeStatus'],
+    queryKey: isPublic ? QK.publicIntradayRegimeStatus : QK.intradayRegimeStatus,
     queryFn: isPublic ? api.publicEnvRegimeStatus : api.intradayRegimeStatus,
     refetchInterval: 30000,
   })
 
   // 查询历史数据 (与环境/情绪单页共享缓存)
   const envHistory = useQuery({
-    queryKey: [isPublic ? 'publicIntradayRegimeHistory' : 'intradayRegimeHistory', selectedDate],
+    queryKey: isPublic ? QK.publicIntradayRegimeHistory(selectedDate) : QK.intradayRegimeHistory(selectedDate),
     queryFn: () => (isPublic ? api.publicEnvRegimeHistory : api.intradayRegimeHistory)(selectedDate ?? undefined),
     refetchInterval: selectedDate ? undefined : 60000,
   })
   const sentHistory = useQuery({
-    queryKey: [isPublic ? 'publicIntradaySentimentHistory' : 'intradaySentimentHistory', selectedDate],
+    queryKey: isPublic ? QK.publicIntradaySentimentHistory(selectedDate) : QK.intradaySentimentHistory(selectedDate),
     queryFn: () => (isPublic ? api.publicEnvSentimentHistory : api.intradaySentimentHistory)(selectedDate ?? undefined),
     refetchInterval: selectedDate ? undefined : 60000,
   })
@@ -227,10 +175,10 @@ export function IntradayRegimeSentiment({ variant = 'internal' }: { variant?: 'i
         api.intradaySentimentCompute(true),
       ])
       await Promise.all([
-        qc.invalidateQueries({ queryKey: ['intradayRegimeHistory'] }),
-        qc.invalidateQueries({ queryKey: ['intradayRegimeStatus'] }),
-        qc.invalidateQueries({ queryKey: ['intradaySentimentHistory'] }),
-        qc.invalidateQueries({ queryKey: ['intradaySentimentStatus'] }),
+        qc.invalidateQueries({ queryKey: QK.intradayRegimeHistory(selectedDate) }),
+        qc.invalidateQueries({ queryKey: QK.intradayRegimeStatus }),
+        qc.invalidateQueries({ queryKey: QK.intradaySentimentHistory(selectedDate) }),
+        qc.invalidateQueries({ queryKey: QK.intradaySentimentStatus }),
       ])
       toast('已更新实时环境与情绪数据', 'success')
     } catch (e) {

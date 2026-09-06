@@ -28,6 +28,20 @@ export const QK = {
   publicReplayDates: ['public-replay-dates'] as const,
   publicReplayTimes: (date: string) => ['public-replay-times', date] as const,
   publicReplayLoad: (date?: string, time?: string) => ['public-replay-load', date ?? '', time ?? ''] as const,
+  // 实时环境 / 实时情绪 (IntradayRegime / IntradaySentiment 单页与合并页共享缓存;
+  // date 传 null 表示「实时/今天」)
+  intradayRegimeDates:        ['intradayRegimeDates'] as const,
+  intradayRegimeStatus:       ['intradayRegimeStatus'] as const,
+  intradayRegimeHistory:      (date: string | null) => ['intradayRegimeHistory', date] as const,
+  intradaySentimentDates:     ['intradaySentimentDates'] as const,
+  intradaySentimentStatus:    ['intradaySentimentStatus'] as const,
+  intradaySentimentHistory:   (date: string | null) => ['intradaySentimentHistory', date] as const,
+  // 免登录公开页 (/sentiment, 合并页 public variant): 与站内缓存隔离 (公开端点无 status)
+  publicIntradayRegimeDates:        ['publicIntradayRegimeDates'] as const,
+  publicIntradayRegimeStatus:       ['publicIntradayRegimeStatus'] as const,
+  publicIntradayRegimeHistory:      (date: string | null) => ['publicIntradayRegimeHistory', date] as const,
+  publicIntradaySentimentDates:     ['publicIntradaySentimentDates'] as const,
+  publicIntradaySentimentHistory:   (date: string | null) => ['publicIntradaySentimentHistory', date] as const,
   indexQuotes:    ['index-quotes'] as const,
 
   // Watchlist

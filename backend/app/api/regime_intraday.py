@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Query, Request
 
+from app.market_time import cn_now
 from app.services.intraday_regime import (
     INTRADAY_REGIME_DIR,
     get_intraday_regime_service,
     is_trading_time,
-    load_intraday_regime,
 )
 
 router = APIRouter(prefix="/api/regime/intraday", tags=["regime-intraday"])
@@ -39,7 +39,7 @@ def intraday_regime_history(request: Request, target_date: date | None = Query(N
 @router.get("/status")
 def intraday_regime_status(request: Request):
     """获取实时环境服务状态。"""
-    now = datetime.now()
+    now = cn_now()
     trading = is_trading_time(now)
     return {
         "trading_time": trading,

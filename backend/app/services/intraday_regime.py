@@ -6,17 +6,17 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import polars as pl
 
-from app.services import regime_builder
+from app.indicators.pipeline import compute_indicators, compute_limit_signals
 from app.market_time import cn_now, cn_today
-from app.tickflow.repository import enriched_dirname
-from app.indicators.pipeline import compute_indicators, compute_limit_signals, compute_signals
 from app.parquet import scan_enriched_parquet
+from app.services import regime_builder
+from app.tickflow.repository import enriched_dirname
 
 logger = logging.getLogger(__name__)
 
@@ -124,20 +124,26 @@ def save_intraday_regime(data_dir: Path, df: pl.DataFrame, target_date: date | N
     df.write_parquet(path)
 
 
+# 追加写串行锁: 后台采集线程与 POST /compute 并发到达时, 读-改-写全日 parquet
+# 必须互斥, 否则后写者会覆盖掉先写者刚追加的记录 (丢分钟数据)。
+_append_lock = threading.Lock()
+
+
 def append_intraday_regime(data_dir: Path, record: dict[str, Any], target_date: date | None = None) -> None:
     """追加单条分钟级环境记录。"""
-    existing = load_intraday_regime(data_dir, target_date)
-    new_record = pl.DataFrame([record])
-    
-    if existing.is_empty():
-        combined = new_record
-    else:
-        # 移除已存在的相同时间戳记录
-        existing = existing.filter(pl.col("timestamp") != record["timestamp"])
-        combined = pl.concat([existing, new_record], how="vertical_relaxed")
-    
-    combined = combined.sort("timestamp")
-    save_intraday_regime(data_dir, combined, target_date)
+    with _append_lock:
+        existing = load_intraday_regime(data_dir, target_date)
+        new_record = pl.DataFrame([record])
+
+        if existing.is_empty():
+            combined = new_record
+        else:
+            # 移除已存在的相同时间戳记录
+            existing = existing.filter(pl.col("timestamp") != record["timestamp"])
+            combined = pl.concat([existing, new_record], how="vertical_relaxed")
+
+        combined = combined.sort("timestamp")
+        save_intraday_regime(data_dir, combined, target_date)
 
 
 def _depth_fake_limit_up(depth_service, target_date: date) -> int:
@@ -160,18 +166,22 @@ def _compute_intraday_regime_impl(repo, depth_service=None) -> dict[str, Any] | 
     try:
         now = cn_now()
         target_date = now.date()
-        
+
         # 加载完整的 enriched 数据
         enriched_dir = repo.store.data_dir / enriched_dirname("stock")
         if not enriched_dir.exists():
             logger.warning("enriched data not available for intraday regime")
             return None
-        
+
+        # 廉价预检: 今日分区未生成时 (盘前/竞价/节假日) 本轮必然无数据, 直接跳过
+        if not any((enriched_dir / f"date={target_date.isoformat()}").glob("*.parquet")):
+            return None
+
         # 加载今日数据（带预热）
         load_start = target_date - timedelta(days=150)
-        read_cols = ["symbol", "date", "open", "high", "low", "close", "volume", 
+        read_cols = ["symbol", "date", "open", "high", "low", "close", "volume",
                      "amount", "raw_close", "raw_high", "raw_low"]
-        
+
         try:
             lf = scan_enriched_parquet(str(enriched_dir / "**" / "*.parquet")).filter(
                 (pl.col("date") >= load_start) & (pl.col("date") <= target_date)
@@ -181,20 +191,23 @@ def _compute_intraday_regime_impl(repo, depth_service=None) -> dict[str, Any] | 
         except Exception as e:
             logger.warning("intraday regime load failed: %s", e)
             return None
-        
+
         if df_hist.is_empty():
             return None
-        
+
         # 计算指标 - 只计算需要的列，与 regime_builder 保持一致
         df_full = compute_indicators(df_hist, needed={"change_pct", "ma20"})
-        
+
         # 计算涨跌停信号
         instruments = repo.get_instruments()
         if instruments is not None and not instruments.is_empty():
             df_full = compute_limit_signals(
                 df_full,
                 instruments,
-                needed={"signal_limit_up", "signal_limit_down", "signal_broken_limit_up"},
+                # consecutive_limit_ups 必须要: _aggregate_daily 的最高连板/梯队/封板率
+                # 梯队指标全依赖它, 缺了会让投机维的连板高度子项恒 0 (口径失真)
+                needed={"signal_limit_up", "signal_limit_down", "signal_broken_limit_up",
+                        "consecutive_limit_ups"},
                 historical_shares=repo.get_historical_shares(),
             )
         

@@ -77,6 +77,81 @@ def _score(value: float, low: float, high: float) -> int:
     return max(0, min(100, round((value - low) / (high - low) * 100)))
 
 
+def compute_emotion_scores(metrics: dict) -> dict:
+    """六维情绪评分单一来源 (看板 radar 与情绪周期 sentiment_builder 共用)。
+
+    权重与归一化区间此前在看板与 sentiment_builder 各写一份, 极易漂移;
+    现统一为本函数, 两处只负责组装 metrics。
+
+    metrics 期望字段:
+      avg_index_pct(百分比), up_pct, avg_pct(小数), median_pct(小数),
+      strong_diff_pct, avg_vol_ratio, high_vol_pct, limit_up, seal_rate(百分数),
+      max_boards, tier2_count, down_pct, strong_down_pct,
+      mainline_avg(小数, 无主线数据时传 None → 主线维 50 分), mainline_cover_pct
+
+    Returns:
+        {index_score, profit_score, money_score, speculation_score,
+         resilience_score, mainline_score, emotion_score, emotion_label}
+    """
+    index_score = _score(metrics.get("avg_index_pct", 0), -2.5, 2.5)
+
+    profit_score = round(
+        _score(metrics.get("up_pct", 50), 20, 80) * 0.45 +
+        _score(metrics.get("avg_pct", 0), -0.02, 0.02) * 0.25 +
+        _score(metrics.get("median_pct", 0), -0.02, 0.02) * 0.20 +
+        _score(metrics.get("strong_diff_pct", 0), -8, 8) * 0.10
+    )
+
+    money_score = round(
+        _score(metrics.get("avg_vol_ratio", 1), 0.6, 1.8) * 0.70 +
+        _score(metrics.get("high_vol_pct", 5), 2, 12) * 0.30
+    )
+
+    speculation_score = round(
+        _score(metrics.get("limit_up", 0), 5, 90) * 0.25 +
+        _score(metrics.get("seal_rate", 50), 30, 85) * 0.35 +
+        _score(metrics.get("max_boards", 0), 1, 8) * 0.25 +
+        _score(metrics.get("tier2_count", 0), 0, 30) * 0.15
+    )
+
+    resilience_score = 100 - round(
+        _score(metrics.get("down_pct", 50), 20, 80) * 0.55 +
+        _score(metrics.get("strong_down_pct", 5), 1, 12) * 0.45
+    )
+
+    mainline_avg = metrics.get("mainline_avg")
+    mainline_score = round(
+        _score(mainline_avg, -0.005, 0.03) * 0.65 +
+        _score(metrics.get("mainline_cover_pct", 0), 1, 12) * 0.35
+    ) if mainline_avg is not None else 50
+
+    emotion_score = round(
+        (index_score + profit_score + money_score + speculation_score + resilience_score + mainline_score) / 6
+    )
+
+    if emotion_score >= 70:
+        emotion_label = "强势"
+    elif emotion_score >= 55:
+        emotion_label = "偏暖"
+    elif emotion_score >= 45:
+        emotion_label = "震荡"
+    elif emotion_score >= 30:
+        emotion_label = "偏冷"
+    else:
+        emotion_label = "冰点"
+
+    return {
+        "index_score": index_score,
+        "profit_score": profit_score,
+        "money_score": money_score,
+        "speculation_score": speculation_score,
+        "resilience_score": resilience_score,
+        "mainline_score": mainline_score,
+        "emotion_score": emotion_score,
+        "emotion_label": emotion_label,
+    }
+
+
 def _money_calibration_factor(repo, as_of: date | None, rows: list[dict]) -> float | None:
     """情绪量能维的盘中分布校准系数 (elapsed/240)/D(t); 不适用返回 None。
 
@@ -576,27 +651,37 @@ def build_market_overview(
     mainline_items = [*concept_rank["leading"][:3], *industry_rank["leading"][:3]]
     mainline_avg = max([_finite(item.get("avg_pct")) or 0 for item in mainline_items], default=0)
     mainline_cover_pct = max([(_finite(item.get("count")) or 0) / total * 100 for item in mainline_items], default=0) if total else 0
-    mainline_score = round(_score(mainline_avg, -0.005, 0.03) * 0.65 + _score(mainline_cover_pct, 1, 12) * 0.35) if mainline_items else 50
+
+    # 六维评分走 compute_emotion_scores 单一来源 (与 sentiment_builder 共用);
+    # 无主线成分时 mainline_avg 传 None → 主线维 50 分, 与原 mainline_items 空档语义一致
+    scores = compute_emotion_scores({
+        "avg_index_pct": avg_index_pct,
+        "up_pct": up_pct,
+        "avg_pct": avg_pct,
+        "median_pct": median_pct,
+        "strong_diff_pct": strong_diff_pct,
+        "avg_vol_ratio": money_avg_vol_ratio,
+        "high_vol_pct": money_high_vol_pct,
+        "limit_up": limit_up,
+        "seal_rate": seal_rate,
+        "max_boards": max_boards,
+        "tier2_count": tier2_count,
+        "down_pct": down_pct,
+        "strong_down_pct": strong_down_pct,
+        "mainline_avg": mainline_avg if mainline_items else None,
+        "mainline_cover_pct": mainline_cover_pct,
+    })
 
     radar = [
-        {"key": "index", "label": "指数", "value": _score(avg_index_pct, -2.5, 2.5)},
-        {"key": "profit", "label": "赚钱", "value": round(_score(up_pct, 20, 80) * 0.45 + _score(avg_pct, -0.02, 0.02) * 0.25 + _score(median_pct, -0.02, 0.02) * 0.20 + _score(strong_diff_pct, -8, 8) * 0.10)},
-        {"key": "money", "label": "量能", "value": round(_score(money_avg_vol_ratio, 0.6, 1.8) * 0.70 + _score(money_high_vol_pct, 2, 12) * 0.30)},
-        {"key": "speculation", "label": "投机", "value": round(_score(limit_up, 5, 90) * 0.25 + _score(seal_rate, 30, 85) * 0.35 + _score(max_boards, 1, 8) * 0.25 + _score(tier2_count, 0, 30) * 0.15)},
-        {"key": "resilience", "label": "抗跌", "value": 100 - round(_score(down_pct, 20, 80) * 0.55 + _score(strong_down_pct, 1, 12) * 0.45)},
-        {"key": "mainline", "label": "主线", "value": mainline_score},
+        {"key": "index", "label": "指数", "value": scores["index_score"]},
+        {"key": "profit", "label": "赚钱", "value": scores["profit_score"]},
+        {"key": "money", "label": "量能", "value": scores["money_score"]},
+        {"key": "speculation", "label": "投机", "value": scores["speculation_score"]},
+        {"key": "resilience", "label": "抗跌", "value": scores["resilience_score"]},
+        {"key": "mainline", "label": "主线", "value": scores["mainline_score"]},
     ]
-    emotion_score = round(sum(r["value"] for r in radar) / len(radar)) if radar else 50
-    if emotion_score >= 70:
-        emotion_label = "强势"
-    elif emotion_score >= 55:
-        emotion_label = "偏暖"
-    elif emotion_score >= 45:
-        emotion_label = "震荡"
-    elif emotion_score >= 30:
-        emotion_label = "偏冷"
-    else:
-        emotion_label = "冰点"
+    emotion_score = scores["emotion_score"]
+    emotion_label = scores["emotion_label"]
 
     return _json_safe({
         "as_of": str(as_of),

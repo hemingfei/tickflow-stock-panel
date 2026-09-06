@@ -96,7 +96,12 @@ export function BoardReplay({ variant = 'internal' }: { variant?: 'internal' | '
     queryFn: () => (isPublic ? api.publicReplayLoad : api.boardSnapshotLoad)(date, nodeTime!),
     enabled: !!date && !!nodeTime,
     staleTime: 30 * 60_000,
-    placeholderData: (prev) => prev,  // 拖动切节点时保留上一份画面, 避免整板闪烁
+    placeholderData: (prev, prevQuery) => {
+      // 拖动切节点时保留上一份画面, 避免整板闪烁;
+      // 跨日期切换不保留 (否则旧日期画面会在新日期工具栏下短暂冒充)
+      const prevDate = prevQuery?.queryKey[1]
+      return prevDate === (date || '') ? prev : undefined
+    },
   })
   const snap = snapQ.data?.snapshot
 

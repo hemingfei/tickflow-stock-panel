@@ -1,7 +1,9 @@
 /**
  * 实时环境分时页面 - 分钟级环境综合分走势
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
+import { useEChart } from '@/lib/useEChart'
+import { QK } from '@/lib/queryKeys'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import {
@@ -28,56 +30,6 @@ const REGIME_LABEL_COLORS: Record<string, string> = {
 }
 
 /** ECharts hook */
-function useEChart(
-  option: echarts.EChartsOption | null,
-  deps: unknown[],
-  events?: Record<string, (params: any) => void>,
-  opts?: { notMerge?: boolean }
-) {
-  const ref = useRef<HTMLDivElement>(null)
-  const instRef = useRef<echarts.ECharts | null>(null)
-  const eventsRef = useRef<Record<string, (params: any) => void> | undefined>()
-
-  useEffect(() => {
-    if (!ref.current) return
-    instRef.current = echarts.init(ref.current, undefined, { renderer: 'canvas' })
-    const onResize = () => instRef.current?.resize()
-    window.addEventListener('resize', onResize)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      instRef.current?.dispose()
-      instRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!instRef.current) return
-    const inst = instRef.current
-    if (eventsRef.current) {
-      Object.keys(eventsRef.current).forEach(evt => {
-        inst.off(evt)
-      })
-    }
-    if (events) {
-      Object.entries(events).forEach(([evt, handler]) => {
-        inst.on(evt, handler)
-      })
-    }
-    eventsRef.current = events
-  }, [events])
-
-  useEffect(() => {
-    if (instRef.current && option) {
-      instRef.current.setOption(option, {
-        notMerge: opts?.notMerge ?? true,
-        lazyUpdate: false
-      })
-    }
-  }, [option, ...deps])
-
-  ;(ref as any).instRef = instRef
-  return ref
-}
 
 /** 通用 SectionTitle */
 function SectionTitle({ icon: Icon, title, hint }: { icon: typeof Activity; title: string; hint?: ReactNode }) {
@@ -101,20 +53,20 @@ export function IntradayRegime() {
 
   // 查询可用日期
   const dates = useQuery({
-    queryKey: ['intradayRegimeDates'],
+    queryKey: QK.intradayRegimeDates,
     queryFn: () => api.intradayRegimeDates(),
   })
 
   // 查询状态
   const status = useQuery({
-    queryKey: ['intradayRegimeStatus'],
+    queryKey: QK.intradayRegimeStatus,
     queryFn: () => api.intradayRegimeStatus(),
     refetchInterval: 30000, // 30 秒刷新一次
   })
 
   // 查询历史数据
   const history = useQuery({
-    queryKey: ['intradayRegimeHistory', selectedDate],
+    queryKey: QK.intradayRegimeHistory(selectedDate),
     queryFn: () => api.intradayRegimeHistory(selectedDate ?? undefined),
     refetchInterval: selectedDate ? undefined : 60000, // 只有在查看今天时才自动刷新
   })
@@ -131,8 +83,8 @@ export function IntradayRegime() {
     try {
       await api.intradayRegimeCompute(true)
       await Promise.all([
-        qc.invalidateQueries({ queryKey: ['intradayRegimeHistory'] }),
-        qc.invalidateQueries({ queryKey: ['intradayRegimeStatus'] }),
+        qc.invalidateQueries({ queryKey: QK.intradayRegimeHistory(selectedDate) }),
+        qc.invalidateQueries({ queryKey: QK.intradayRegimeStatus }),
       ])
       toast('已更新实时环境数据', 'success')
     } catch (e) {
