@@ -59,7 +59,7 @@ interface Props {
   isIndex?: boolean
 }
 
-function computeAvgPrice(data: MinuteKlineRow[], isIndex = false): number[] {
+function computeAvgPrice(data: MinuteKlineRow[], isIndex = false): (number | null)[] {
   // 分时均价: 指数用 5 周期 SMA 作为均价参考 (VWAP 对加权指数意义不大);
   // 个股沿用共享库的标准 VWAP (累计成交额 / 累计成交量, 手→股 ×100)。
   if (isIndex) {
@@ -79,7 +79,8 @@ function computeAvgPrice(data: MinuteKlineRow[], isIndex = false): number[] {
   return computeIntradayAverage(data)
 }
 
-function fmtAmt(v: number): string {
+function fmtAmt(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '—'
   if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(2)}亿`
   if (v >= 10_000) return `${(v / 10_000).toFixed(0)}万`
   return v.toFixed(0)
@@ -111,7 +112,7 @@ function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   return { limitUp, limitDown, upPct, downPct }
 }
 
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: number[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, isIndex = false, priceLines: Props['priceLines'] = []): EChartsOption {
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: (number | null)[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, isIndex = false, priceLines: Props['priceLines'] = []): EChartsOption {
   // 对于指数，默认不显示均价线
   const effectiveShowAvgLine = isIndex ? false : showAvgLine
   // 将数据映射到全天时间轴上的正确位置
@@ -664,7 +665,7 @@ export function EChartsIntraday({
               </span>
               {effectiveShowAvgLine && <span className="flex items-center gap-x-1">
                 <span style={{ display: 'inline-block', width: 14, height: 2, background: getTHEME().avgLine }} />
-                <span style={{ color: getTHEME().avgLine }}>{avg?.toFixed(2)}</span>
+                <span style={{ color: getTHEME().avgLine }}>{avg != null ? avg.toFixed(2) : '—'}</span>
               </span>}
               <span className="text-muted">量</span>
               <span className="text-secondary">{d.volume.toFixed(0)}</span>

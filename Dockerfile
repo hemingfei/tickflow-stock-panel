@@ -77,6 +77,9 @@ WORKDIR /app
 # Codex CLI 从官方 npm 包提取原生二进制，不依赖运行时 Node.js。
 # bookworm 自带 nodejs 18.19, 满足插件 engines>=18; --no-install-recommends 精简,
 # 自带 libnode/libc-ares 等全部动态依赖, 无需手动补库。
+# 国内构建换 apt 国内镜像 (兼容新旧 Debian 源配置格式)。官方 python slim 镜像的
+# sources 指向 deb.debian.org, 部分国内网络下 apt 极慢(实测阿里云 ECS 拉官方源
+# 单阶段可达 8 分钟以上); USE_CN_MIRROR 与 npm/pypi 的换源开关注一脉相承。
 # tesseract-ocr: 自选截图导入（始终安装）; nodejs: 仅 INCLUDE_STOCKSDK=1 时安装
 RUN if [ "$USE_CN_MIRROR" = "1" ]; then \
       # 尝试多个国内 apt 镜像源，任一成功即可（兼容新旧 Debian 源配置格式）
@@ -154,6 +157,13 @@ COPY --from=codex-builder /opt/codex-native /usr/local/bin/codex
 RUN codex --version
 
 ENV PYTHONPATH=/app
+# 运行时 uv 镜像源持久化: CMD 用 `uv run` 启动, 锁与 pyproject 不一致等场景下
+# uv 会在容器内重新解析/安装 —— 无源配置时默认 pypi.org, 国内网络会卡死启动
+# (实测阿里云 ECS)。与构建期 RUN 内的 export 同源, 这里让它跨层存活。
+ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
+ENV UV_DEFAULT_INDEX=${PYPI_INDEX} \
+    UV_EXTRA_INDEX_URL=${PYPI_FALLBACK}
 # 兜底时区: 交易时段判断已在代码里显式用北京时间 (app/market_time.py),
 # 此处让日志时间戳等其余 naive 时间也对齐北京时间。
 ENV TZ=Asia/Shanghai
