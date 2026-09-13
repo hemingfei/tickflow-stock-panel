@@ -45,6 +45,7 @@ SOURCE_LABELS = {
     "strategy": "策略", "signal": "信号", "price": "价格",
     "market": "异动", "ladder": "连板梯队", "sector": "板块",
     "volume_delta": "放量", "abnormal": "异动", "date": "日期提醒",
+    "resonance": "指数共振",
 }
 
 # final 定版确认容差: 快照时间戳允许早于边界 5s 内 (供应商时间戳精度不一)
@@ -75,6 +76,32 @@ logger = logging.getLogger(__name__)
 # webhook 慢/宕机会逐条累加, 拖垮整条实时行情+告警轮询。这里 fire-and-forget,
 # 失败由 webhook_adapter 记 WARNING(可见), 但绝不阻塞热路径。
 _WEBHOOK_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="feishu-webhook")
+
+
+def _resonance_alerts(events: list[dict]) -> list[dict]:
+    """指数共振事件 -> SSE 告警格式 (与监控规则事件转换后的 all_alerts 同构)。"""
+    alerts: list[dict] = []
+    for ev in events:
+        alert = {
+            "source": "resonance",
+            "type": ev.get("type", "resonance_up"),
+            "rule_id": ev.get("rule_id"),
+            "strategy_id": None,
+            "symbol": ev.get("symbol"),
+            "name": ev.get("name"),
+            "message": ev.get("message", ""),
+            "price": ev.get("price"),
+            "change_pct": ev.get("change_pct"),
+            "signals": [],
+            "severity": ev.get("severity", "info"),
+            "conditions": [],
+            "logic": "and",
+            "rule_name": ev.get("rule_name", ""),
+        }
+        if isinstance(ev.get("resonance"), dict):
+            alert["resonance"] = ev["resonance"]
+        alerts.append(alert)
+    return alerts
 
 
 class QuoteSubscriber:
@@ -1294,6 +1321,31 @@ class QuoteService:
                                     alert[key] = ev[key]
                             all_alerts.append(alert)
 
+            # 指数共振: 与监控规则共用本轮实时快照, 独立评估 (无启用监测时零开销)。
+            # 任意异常只降级共振状态, 不得影响监控告警主流程。
+            resonance_service = getattr(self._app_state, "resonance_service", None)
+            if resonance_service is not None and resonance_service.has_enabled_monitors():
+                try:
+                    resonance_service.update(
+                        enriched_today if stock_ready else pl.DataFrame(),
+                        self.get_index_quotes(),
+                    )
+                    # 共振上升沿 -> 复用告警管线: 触发记录落盘 + SSE toast +
+                    # 系统通知 + webhook (rule_events 尾部接入, 见 _maybe_send_webhook)
+                    res_events = resonance_service.consume_events()
+                    if res_events:
+                        try:
+                            from app.services import alert_store
+                            alert_store.append_many(
+                                self._app_state.repo.store.data_dir, res_events,
+                            )
+                        except Exception as e:
+                            logger.warning("共振告警落盘失败: %s", e)
+                        all_alerts.extend(_resonance_alerts(res_events))
+                        rule_events.extend(res_events)
+                except Exception as e:
+                    logger.warning("指数共振评估失败 (不影响其他监控): %s", e)
+
             # 策略页实时回显: 不写文件 (实时行情每轮更新 enriched, 写文件会被 read_cache
             # 的 mtime 校验判过期, 反复读不到)。监控引擎本轮已算出的结果存在内存
             # (latest_strategy_results), 由 /api/screener/cached 端点直接叠加读取。
@@ -1611,11 +1663,15 @@ class QuoteService:
             rules = engine.rules if engine is not None else {}
             enqueued = 0
             for ev in rule_events:
-                rule = rules.get(ev.get("rule_id"))
-                # webhook_channels 指定命中的渠道 (['feishu'] / ['wecom'] / ['kol'] /
-                # ['custom'] / ['email'] / 任意组合 / []). 空列表 = 该规则不推送。
-                # 仅推送「渠道已选 + 对应地址已配置」的组合。
-                channels = rule.get("webhook_channels") if rule else None
+                # 共振事件渠道由监测配置自带 (webhook_channels); 其余从引擎规则反查
+                if ev.get("source") == "resonance":
+                    channels = ev.get("webhook_channels") or []
+                else:
+                    rule = rules.get(ev.get("rule_id"))
+                    # webhook_channels 指定命中的渠道 (['feishu'] / ['wecom'] / ['kol'] /
+                    # ['custom'] / ['email'] / 任意组合 / []). 空列表 = 该规则不推送。
+                    # 仅推送「渠道已选 + 对应地址已配置」的组合。
+                    channels = rule.get("webhook_channels") if rule else None
                 if not channels:
                     continue
                 source = ev.get("source", "")

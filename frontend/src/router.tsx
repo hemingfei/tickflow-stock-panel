@@ -48,6 +48,7 @@ const PublicIntradayRegimeSentiment = lazy(() => import('./pages/IntradayRegimeS
 // 免登录公开分享页: 看板回放 + 实时环境情绪 二合一标签切换
 const PublicShare = lazy(() => import('./pages/PublicShare').then(m => ({ default: m.PublicShare })))
 const LiveIndices = lazy(() => import('./pages/LiveIndices').then(m => ({ default: m.LiveIndices })))
+const IndexResonance = lazy(() => import('./pages/IndexResonance').then(m => ({ default: m.IndexResonance })))
 const AbnormalMoves = lazy(() => import('./pages/AbnormalMoves').then(m => ({ default: m.AbnormalMoves })))
 const Dev = lazy(() => import('./pages/Dev').then(m => ({ default: m.Dev })))
 
@@ -189,6 +190,7 @@ export const router = createBrowserRouter([
       { path: 'intraday-regime', element: <IntradayRegime /> },
       { path: 'intraday-regime-sentiment', element: <IntradayRegimeSentiment /> },
       { path: 'live-indices', element: <LiveIndices /> },
+      { path: 'resonance', element: <IndexResonance /> },
       { path: 'branding', element: <Branding /> },
       { path: 'settings', element: <Settings /> },
       // 隐藏路由：开发者工具（不暴露在菜单，仅供调试）

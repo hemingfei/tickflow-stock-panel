@@ -2025,9 +2025,124 @@ export interface StrategyAlertEvent {
   [key: string]: unknown
 }
 
+// ===== 指数共振 (ResonanceMonitor, /api/resonance/*) =====
+// 所有涨跌幅/窗口涨幅字段均为百分数口径 (3.66 = 3.66%), 与指数侧一致
+export interface ResonanceTimeRange { start: string; end: string }
+
+export interface ResonanceMonitor {
+  id: string
+  name: string
+  index_symbol: string
+  enabled: boolean
+  /** 生效时间段 (分钟数); 空 = 整个连续竞价时段 */
+  time_ranges: { start: number; end: number }[]
+  /** 动量窗口 (秒), 30-3600; 旧配置的 window_minutes 已按 ×60 迁移 */
+  window_seconds: number
+  index_threshold_pct: number
+  group_up_ratio: number
+  min_group_members: number
+  group_ids: string[]
+  /** 涨幅门禁(百分数), <0 = 停用 */
+  index_change_pct_gate: number
+  /** 量比门禁(倍), <=0 = 停用; 量比 = 窗口每分钟量 / 窗口起点时刻的当日每分钟平均量 */
+  index_volume_ratio_gate: number
+  group_change_pct_gate: number
+  group_volume_ratio_gate: number
+  leader_change_pct_gate: number
+  leader_volume_ratio_gate: number
+  /** 推送渠道; 空 = 不推 webhook (站内 toast/系统通知不受此限) */
+  webhook_channels: string[]
+  /** 共振通知冷却(秒); 0 = 仅按上升沿去重 */
+  notify_cooldown_seconds: number
+  created_at: string
+}
+
+export interface ResonanceMonitorUpsert {
+  name: string
+  index_symbol: string
+  enabled?: boolean
+  time_ranges?: ResonanceTimeRange[]
+  window_seconds?: number
+  index_threshold_pct?: number
+  group_up_ratio?: number
+  min_group_members?: number
+  group_ids?: string[]
+  index_change_pct_gate?: number
+  index_volume_ratio_gate?: number
+  group_change_pct_gate?: number
+  group_volume_ratio_gate?: number
+  leader_change_pct_gate?: number
+  leader_volume_ratio_gate?: number
+  webhook_channels?: string[]
+  notify_cooldown_seconds?: number
+}
+
+/** 三维门禁结果: true 通过 / false 未过 / null 停用或数据不可判定(不否决) */
+export type ResonanceGate = boolean | null
+
+export interface ResonanceLeader {
+  symbol: string
+  name: string | null
+  change_pct: number
+  window_change_pct: number
+  volume_ratio: number | null
+}
+
+export interface ResonanceGroupRow {
+  group_id: string
+  name: string
+  member_count: number
+  valid_count: number
+  avg_change_pct: number
+  avg_window_pct: number
+  volume_ratio: number | null
+  up_count: number
+  up_ratio: number
+  qualifying: boolean
+  rank: number
+  gates: {
+    members: boolean
+    breadth: boolean
+    momentum: boolean
+    change: ResonanceGate
+    volume: ResonanceGate
+  }
+  leader: ResonanceLeader
+}
+
+export interface ResonanceMonitorState {
+  /** disabled / off_window / no_data / warming / up / down / flat */
+  status: string
+  in_window: boolean
+  resonant: boolean
+  resonant_since: number | null
+  index: {
+    symbol: string
+    name: string
+    price: number | null
+    change_pct: number | null
+    window_change_pct: number | null
+    volume_ratio: number | null
+    gates: { momentum: ResonanceGate; change: ResonanceGate; volume: ResonanceGate }
+  }
+  groups: ResonanceGroupRow[]
+  top_group_id: string | null
+  leader: ResonanceLeader | null
+}
+
+export interface ResonanceStateRow {
+  config: ResonanceMonitor
+  state: ResonanceMonitorState
+}
+
+export interface ResonanceStateResponse {
+  /** 最新一轮实时计算的服务器时间戳 (秒); 无监测时为 0 */
+  ts: number
+  monitors: ResonanceStateRow[]
+}
+
 // ===== API surface =====
-export const api = {
-  health: () => request<{ status: string; version: string; mode: string }>('/health'),
+export const api = {  health: () => request<{ status: string; version: string; mode: string }>('/health'),
 
   // ===== Auth (访问认证) =====
   authStatus: () =>
@@ -2773,6 +2888,32 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ data, replace }),
       }),
+  },
+
+  // ── 指数共振 (IndexResonance 页面, 后端 /api/resonance/*) ──
+  resonance: {
+    listMonitors: () =>
+      request<{ monitors: ResonanceMonitor[] }>('/api/resonance/monitors'),
+
+    createMonitor: (payload: ResonanceMonitorUpsert) =>
+      request<{ monitors: ResonanceMonitor[] }>('/api/resonance/monitors', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+
+    updateMonitor: (monitorId: string, payload: ResonanceMonitorUpsert) =>
+      request<{ monitors: ResonanceMonitor[] }>(`/api/resonance/monitors/${encodeURIComponent(monitorId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+
+    deleteMonitor: (monitorId: string) =>
+      request<{ monitors: ResonanceMonitor[] }>(`/api/resonance/monitors/${encodeURIComponent(monitorId)}`, {
+        method: 'DELETE',
+      }),
+
+    state: () =>
+      request<ResonanceStateResponse>('/api/resonance/state'),
   },
 
   // timeframe='all' 时不传参数 → 后端不过滤周期, 返回日线+分钟合并列表

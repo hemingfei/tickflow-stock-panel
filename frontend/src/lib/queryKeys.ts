@@ -52,6 +52,9 @@ export const QK = {
   watchlistGroupBoards: ['watchlist-group-boards'] as const,
   watchlistQuotes:      ['watchlist-quotes'] as const,
   watchlistEnriched:    (ext?: string) => ['watchlist-enriched', ext] as const,
+  // 指数共振 (IndexResonance 页面, /api/resonance/*); state 由页面固定间隔轮询
+  resonanceMonitors:    ['resonance-monitors'] as const,
+  resonanceState:       ['resonance-state'] as const,
   // 异动边缘总览 (开启监控时才查询, 参数为 min_closeness/limit)
   abnormalOverview:     (minCloseness: number, limit: number) => ['abnormal-overview', minCloseness, limit] as const,
   // 盘中异动信号聚合 (异动监控「盘中」tab)

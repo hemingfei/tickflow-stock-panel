@@ -33,6 +33,7 @@ from app.api import (
     pipeline,
     regime,
     regime_intraday,
+    resonance,
     rps,
     screener,
     sentiment,
@@ -382,6 +383,13 @@ async def _application_lifespan(app: FastAPI):
     app.state.monitor_engine = monitor_engine
     app.state.sector_monitor_service = sector_monitor_service
 
+    # 指数共振服务: 与板块监控共用实时快照链路, 由 quote_service 盘中驱动计算
+    try:
+        from app.services.index_resonance import IndexResonanceService
+        app.state.resonance_service = IndexResonanceService(repo)
+    except Exception as e:
+        logger.warning("index resonance service init failed (soft): %s", e)
+
     # 分组成员即自选成员: 启动时把统一存储里缺失于自选主列表的成员补入
     # (覆盖旧数据迁移/备份恢复场景; 幂等, 已存在的不动)。软失败不阻断启动。
     try:
@@ -576,6 +584,7 @@ app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(lots.router)
 app.include_router(alerts.router)
+app.include_router(resonance.router)
 app.include_router(rps.router)
 app.include_router(sentiment_intraday.router)
 app.include_router(regime_intraday.router)
