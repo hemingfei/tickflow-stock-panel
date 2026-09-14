@@ -36,6 +36,7 @@ from app.api import (
     resonance,
     rps,
     screener,
+    sector_rotation,
     sentiment,
     sentiment_intraday,
     signals,
@@ -586,6 +587,7 @@ app.include_router(lots.router)
 app.include_router(alerts.router)
 app.include_router(resonance.router)
 app.include_router(rps.router)
+app.include_router(sector_rotation.router)
 app.include_router(sentiment_intraday.router)
 app.include_router(regime_intraday.router)
 app.include_router(regime_intraday.public_router)

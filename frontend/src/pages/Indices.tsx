@@ -132,7 +132,9 @@ export function Indices() {
 
   const chartRows = useMemo(() => toOHLC(daily.data?.rows ?? []), [daily.data?.rows])
   const selectedInfo = topRows.find(r => r.symbol === selectedSymbol) || daily.data?.index_info
-  const minuteRows: MinuteKlineRow[] = minute.data?.rows ?? []
+  const minuteRows: MinuteKlineRow[] = minute.data?.symbol === selectedSymbol
+    && minute.data?.date === selectedDate && daily.data?.symbol === selectedSymbol
+    ? minute.data.rows : []
   const selectedIdx = selectedDate ? chartRows.findIndex(r => r.date === selectedDate) : -1
   const prevClose = selectedIdx > 0
     ? chartRows[selectedIdx - 1].close
@@ -253,7 +255,10 @@ export function Indices() {
                   showMarkers={false}
                   symbol={selectedSymbol}
                   linkedPrice={linkedPrice}
-                  onDateClick={setSelectedDate}
+                  onDateClick={(date) => {
+                    setSelectedDate(date)
+                    setLinkedPrice(null)
+                  }}
                   visibleBars={48}
                   activeIndicators={['vol', 'macd']}
                 />
@@ -274,16 +279,17 @@ export function Indices() {
                       </div>
                     )}
                     {minuteRows.length > 0 && (
-              <EChartsIntraday
-                data={minuteRows}
-                height={620}
-                prevClose={prevClose}
-                date={selectedDate ?? undefined}
-                showLimitLines={false}
-                showAvgLine={false}
-                isIndex={true}
-                onPriceHover={setLinkedPrice}
-              />
+                      <EChartsIntraday
+                        key={`${selectedSymbol}:${selectedDate}`}
+                        data={minuteRows}
+                        height={620}
+                        prevClose={prevClose}
+                        date={selectedDate ?? undefined}
+                        showLimitLines={false}
+                        showAvgLine={false}
+                        isIndex={true}
+                        onPriceHover={setLinkedPrice}
+                      />
                     )}
                   </>
                 )}
