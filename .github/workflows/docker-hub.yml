@@ -1,0 +1,65 @@
+name: Build and Push Docker Image (hmf -> Docker Hub)
+
+# 触发:
+#   - push 到 hmf 分支: 构建镜像并推送到个人 Docker Hub 账号
+#   - 手动:             网页 Actions → Run workflow
+# 前置条件: 仓库 Settings → Secrets and variables → Actions 配置:
+#   - DOCKERHUB_USERNAME: Docker Hub 用户名
+#   - DOCKERHUB_TOKEN:    Docker Hub Access Token
+#     (hub.docker.com → Account Settings → Security → New Access Token, Read/Write 权限)
+on:
+  push:
+    branches: [hmf]
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    env:
+      REGISTRY: docker.io
+      # job 级 env 才能引用 secrets(工作流级 env 不允许), 镜像名沿用仓库名
+      IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/tickflow-stock-panel
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # 只构建 x86, 跳过 QEMU 仿真的 arm64, 构建时间约省一半
+          platforms: linux/amd64
+          # GitHub runner 在海外, 关掉国内镜像源(USE_CN_MIRROR=0)
+          # 让构建直连官方 npm/PyPI, 反而更快更稳;
+          # 本地/国内手动 docker build 仍走 Dockerfile 默认的 CN 镜像。
+          build-args: |
+            USE_CN_MIRROR=0
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
