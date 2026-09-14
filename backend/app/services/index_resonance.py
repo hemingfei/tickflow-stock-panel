@@ -347,6 +347,10 @@ def _fmt_pct(value: float | None) -> str:
     return "—" if value is None else f"{value:+.2f}%"
 
 
+def _fmt_ratio(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f}"
+
+
 def _build_event(
     monitor: dict,
     index_state: dict,
@@ -364,7 +368,7 @@ def _build_event(
     message = (
         f"{index_name} 向上: {_window_label(window_s)} {_fmt_pct(index_state.get('window_change_pct'))}"
         f" · 现涨 {_fmt_pct(index_state.get('change_pct'))}"
-        f" · 量比 {index_state.get('volume_ratio') if index_state.get('volume_ratio') is not None else '—'}"
+        f" · 量比 {_fmt_ratio(index_state.get('volume_ratio'))}"
         f"; 最强板块「{top['name']}」"
         f" {_fmt_pct(top.get('avg_window_pct'))}"
         f" (上涨 {top.get('up_count', 0)}/{top.get('valid_count', 0)})"
@@ -374,7 +378,7 @@ def _build_event(
         message += (
             f"; 龙头 {leader_name}({leader.get('symbol')})"
             f" {_fmt_pct(leader.get('window_change_pct'))}"
-            f" 量比 {leader.get('volume_ratio') if leader.get('volume_ratio') is not None else '—'}"
+            f" 量比 {_fmt_ratio(leader.get('volume_ratio'))}"
         )
     return {
         "ts": int(now * 1000),
@@ -387,7 +391,12 @@ def _build_event(
         "name": monitor["name"],
         "message": message,
         "price": index_state.get("price"),
-        "change_pct": index_state.get("change_pct"),
+        # 告警管线契约 (AlertToast fmtPct / format_alert_quote) 为小数制, 与监控引擎
+        # 事件一致; 共振状态 API 的 change_pct 才是百分数。文案内已按百分数拼好。
+        "change_pct": (
+            index_state["change_pct"] / 100
+            if index_state.get("change_pct") is not None else None
+        ),
         "signals": [],
         "severity": "info",
         "conditions": [],
@@ -504,6 +513,9 @@ class IndexResonanceService:
         data["monitors"] = [monitor if m["id"] == monitor_id else m for m in data["monitors"]]
         with self._lock:
             self._drop_history(monitor_id)
+            # 同步丢弃上一轮实时状态: 停用/编辑后若不再有评估轮次 (如收盘后),
+            # 旧状态 (共振中/up) 会在页面无限期滞留
+            self._state["monitors"].pop(monitor_id, None)
         return _save_store(data)["monitors"]
 
     def delete_monitor(self, monitor_id: str) -> list[dict]:
@@ -530,8 +542,14 @@ class IndexResonanceService:
 
     # ── 实时计算 ─────────────────────────────────────────────────
 
-    def update(self, stock_df: pl.DataFrame, index_df: pl.DataFrame, *, now: float) -> None:
-        """行情轮询驱动: 刷新各启用监测的共振状态 (仅连续竞价时段被调用)。"""
+    def update(self, stock_df: pl.DataFrame, index_df: pl.DataFrame, *, now: float | None = None) -> None:
+        """行情轮询驱动: 刷新各启用监测的共振状态 (仅连续竞价时段被调用)。
+
+        now 缺省取当前时间戳 —— 生产链路 quote_service 按两参调用;
+        测试显式注入以获得确定性推进。
+        """
+        if now is None:
+            now = time.time()
         monitors = [m for m in _load_store()["monitors"] if m.get("enabled")]
         states: dict[str, dict] = {}
         if monitors:

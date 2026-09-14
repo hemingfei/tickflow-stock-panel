@@ -321,6 +321,72 @@ def test_resonance_up_detects_top_group_and_leader(monkeypatch, tmp_path):
     assert st2["resonant_since"] == pytest.approx(360.0)
 
 
+def test_update_default_now_matches_production_call_site(monkeypatch, tmp_path):
+    """回归: 生产链路 (quote_service._evaluate_monitors) 按
+    update(stock_df, index_df) 两参调用; 曾因 now 为必填关键字参数,
+    每轮抛 TypeError 被调用方 except 吞掉, 状态永远停在 idle 的 off_window。
+    缺省 now 必须可用并刷新出实时状态。"""
+    service = _service(monkeypatch, tmp_path)
+    service.create_monitor(_config())
+
+    service.update(_stock_df({"600001.SH": 0.01}), _index_df("399006.SZ", 0.5))
+
+    merged = service.get_state()
+    assert merged["ts"] > 0
+    st = merged["monitors"][0]["state"]
+    assert st["in_window"] is True
+    # 快照已入史(窗口历史不足 -> warming), 不再是静态 off_window
+    assert st["status"] == "warming"
+
+
+def test_update_monitor_drops_stale_live_state(monkeypatch, tmp_path):
+    """回归: 编辑/停用监测后必须丢弃上一轮实时状态。
+
+    收盘后停用监测时不再有评估轮次, 旧状态 (共振中/up) 若不清除
+    会在 get_state 里无限期滞留, 页面显示与 enabled=False 矛盾。
+    """
+    service = _service(monkeypatch, tmp_path)
+    service.create_monitor(_config())
+    clock = _Clock(monkeypatch, _cn_minutes_after_open(0))
+    for step in range(1, 7):
+        clock.advance(60)
+        _poll(service, ts=float(step * 60), index_change_pct=0.1 * step, stock_changes={
+            "600001.SH": 0.0024 * step, "600002.SH": 0.0024 * step,
+            "600003.SH": 0.0004 * step, "600004.SH": 0.0004 * step,
+        })
+    assert service.get_state()["monitors"][0]["state"]["status"] == "up"
+
+    service.update_monitor("res_test", {"enabled": False})
+
+    st = service.get_state()["monitors"][0]["state"]
+    assert st["status"] == "disabled"
+    assert st["resonant"] is False
+
+
+def test_event_change_pct_decimal_for_alert_pipeline(monkeypatch, tmp_path):
+    """回归: 共振事件顶层 change_pct 必须是小数制。
+
+    告警管线 (AlertToast fmtPct / format_alert_quote / 触发记录) 按 ×100 展示,
+    与监控引擎事件同契约; 事件曾带百分数导致 toast/webhook 尾部涨幅放大 100 倍。
+    文案内保持百分数口径不变。
+    """
+    service = _service(monkeypatch, tmp_path)
+    service.create_monitor(_config())
+    clock = _Clock(monkeypatch, _cn_minutes_after_open(0))
+    for step in range(1, 7):
+        clock.advance(60)
+        _poll(service, ts=float(step * 60), index_change_pct=0.1 * step, stock_changes={
+            "600001.SH": 0.0024 * step, "600002.SH": 0.0024 * step,
+            "600003.SH": 0.0004 * step, "600004.SH": 0.0004 * step,
+        })
+    events = service.consume_events()
+    assert len(events) == 1
+    # 指数快照现涨 0.6% (百分数) -> 事件顶层为小数制 0.006
+    assert events[0]["change_pct"] == pytest.approx(0.006)
+    # 文案内仍是百分数口径
+    assert "+0.60%" in events[0]["message"]
+
+
 def test_resonance_states_warming_down_flat_and_no_data(monkeypatch, tmp_path):
     service = _service(monkeypatch, tmp_path)
     service.create_monitor(_config())
