@@ -9,6 +9,7 @@ import { SealedBadge } from '@/components/SealedBadge'
 import { toNavItems, type NavItem } from '@/components/StockPreviewDialog'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
+import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
 import { strategyEventMeta, strategyName } from '@/lib/strategyMonitorEvents'
 import { boardTag } from '@/components/stock-table/primitives'
 
@@ -98,6 +99,7 @@ function MonitorWidget({ events, onStockClick, activeSymbol }: {
   activeSymbol?: string
 }) {
   const navigate = useNavigate()
+  const customNames = useCustomSignalNames()
   // 切股导航列表: 有 symbol 的触发记录
   const alertNav = toNavItems(events.filter((ev): ev is AlertEvent & { symbol: string } => !!ev.symbol))
 
@@ -182,7 +184,7 @@ function MonitorWidget({ events, onStockClick, activeSymbol }: {
                   {ev.signals && ev.signals.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
                       {ev.signals.map(signal => (
-                        <span key={signal} className="rounded bg-accent/8 px-1 py-px text-[8px] text-accent/80">{cnSignal(signal)}</span>
+                        <span key={signal} className="rounded bg-accent/8 px-1 py-px text-[8px] text-accent/80">{cnSignal(signal, customNames)}</span>
                       ))}
                     </div>
                   )}
@@ -203,7 +205,7 @@ function MonitorWidget({ events, onStockClick, activeSymbol }: {
                   {ev.signals && ev.signals.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
                       {ev.signals.map((s, j) => (
-                        <span key={j} className="rounded bg-accent/8 px-1 py-px text-[8px] text-accent/80">{cnSignal(s)}</span>
+                        <span key={j} className="rounded bg-accent/8 px-1 py-px text-[8px] text-accent/80">{cnSignal(s, customNames)}</span>
                       ))}
                     </div>
                   )}

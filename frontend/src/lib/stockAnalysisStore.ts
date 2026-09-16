@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { api, type PriceLevel, type LevelType } from './api'
+import { api, friendlyStreamError, type PriceLevel, type LevelType } from './api'
 import { cnTodayStr } from './format'
 
 /**
@@ -236,7 +236,7 @@ async function runStream(id: string, symbol: string, _name: string, focus: strin
     const msg = String(e?.message ?? '分析失败')
     patchTask(id, {
       phase: 'error',
-      error: normalizeAiError(msg),
+      error: normalizeAiError(friendlyStreamError(msg)),
     })
   }
 }
