@@ -1,12 +1,14 @@
 name: Build and Push Docker Image (hmf -> Docker Hub)
 
 # 触发:
-#   - push 到 hmf 分支: 构建镜像并推送到个人 Docker Hub 账号
+#   - push 到 hmf 分支: 构建镜像并推送到个人 Docker Hub 账号, 推送成功后触发
+#     云服务器 Jenkins(tickflow-panel-deploy)拉新镜像重启容器
 #   - 手动:             网页 Actions → Run workflow
 # 前置条件: 仓库 Settings → Secrets and variables → Actions 配置:
 #   - DOCKERHUB_USERNAME: Docker Hub 用户名
 #   - DOCKERHUB_TOKEN:    Docker Hub Access Token
 #     (hub.docker.com → Account Settings → Security → New Access Token, Read/Write 权限)
+#   - JENKINS_TOKEN:      Jenkins API Token(云服务器 openclaw 账号), 部署触发用
 on:
   push:
     branches: [hmf]
@@ -63,3 +65,69 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # 镜像推送成功后触发云服务器 Jenkins 拉新镜像重启容器(compose pull && up -d),
+      # 与 vpush 的 vpush-deploy 同构(Jenkins 任务已建好并实测通过: 应用启动约 12s,
+      # 健康检查带重试, 探活先 000 后 200 不会误报)。
+      # 触发后全程盯完: /build 排队 → 拿 build 号 → consoleText 增量回显 Jenkins
+      # 四阶段日志(快照/拉取/重建/健康检查), 结束校验 result=SUCCESS;
+      # 超时(约 10min)、部署失败、健康检查不过都让本步骤红叉, Actions 发失败通知。
+      # 轮询期单次网络抖动只当本轮无新输出, 不杀 watch; 触发失败则立刻报错退出。
+      - name: Trigger Jenkins deploy and watch
+        if: ${{ success() }}
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          J="http://106.15.153.53:1180"
+          AUTH="openclaw:${{ secrets.JENKINS_TOKEN }}"
+          JOB="tickflow-panel-deploy"
+
+          echo "==> queueing deploy build..."
+          # 不带 -f：4xx/网络错也要拿到响应头与状态码，否则 set -e 下报错提示走不到
+          rm -f /tmp/jenkins_hdrs
+          HTTP_CODE=$(curl -s -m 15 -X POST -D /tmp/jenkins_hdrs -o /dev/null \
+            -w '%{http_code}' -u "$AUTH" "$J/job/$JOB/build?delay=0sec") || true
+          LOC=$([ -f /tmp/jenkins_hdrs ] && tr -d '\r' < /tmp/jenkins_hdrs | awk 'tolower($1)=="location:"{print $2}' || true)
+          if [ -z "$LOC" ]; then
+            echo "ERROR: queue request rejected (HTTP status: '${HTTP_CODE:-network error}')"
+            echo "       check JENKINS_TOKEN, job name '$JOB', and that the job has no parameters"
+            exit 1
+          fi
+
+          echo "==> deploy queued, waiting to start..."
+          BUILD_URL=""
+          for i in $(seq 1 30); do
+            BUILD_URL=$(curl -sf -u "$AUTH" "$LOC/api/json" \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin).get("executable",{}).get("url",""))' 2>/dev/null || true)
+            [ -n "$BUILD_URL" ] && break
+            sleep 2
+          done
+          [ -n "$BUILD_URL" ] || { echo "ERROR: build did not start within 60s"; exit 1; }
+          N=$(basename "$BUILD_URL")
+          echo "==> deploy build #${N} started: $J/job/$JOB/$N/"
+
+          # consoleText 全量拉取 + 按字节增量打印（Jenkins 无增量端点）；
+          # 命令替换会吞掉日志尾部换行，恰好保证跨轮次的行边界正确拼接；
+          # 轮询间隙单次 curl 失败按「本轮无输出」处理，避免抖动杀掉 watch
+          OFF=0
+          RESULT=""
+          for i in $(seq 1 200); do
+            if LOG=$(curl -sf -m 15 -u "$AUTH" "$J/job/$JOB/$N/consoleText"); then
+              SIZE=$(printf '%s' "$LOG" | wc -c)
+              if [ "$SIZE" -gt "$OFF" ]; then
+                printf '%s' "$LOG" | tail -c +"$((OFF+1))"
+                OFF=$SIZE
+              fi
+            fi
+            if R=$(curl -sf -m 15 -u "$AUTH" "$J/job/$JOB/$N/api/json?tree=building,result"); then
+              if printf '%s' "$R" | grep -q '"building"[ ]*:[ ]*false'; then
+                RESULT=$(printf '%s' "$R" | grep -o '"result"[ ]*:[ ]*"[^"]*"' | cut -d'"' -f4 || true)
+                break
+              fi
+            fi
+            sleep 3
+          done
+          [ -n "$RESULT" ] || { echo "ERROR: deploy finished without result (aborted?) or still running after ~10min"; exit 1; }
+          echo ""
+          echo "===== deploy result: $RESULT ====="
+          [ "$RESULT" = "SUCCESS" ] || exit 1
