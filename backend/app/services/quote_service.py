@@ -310,14 +310,20 @@ class QuoteService:
         self._save_enabled(True)
         logger.info("行情服务已启动, 轮询间隔 %.1fs", self._interval)
 
-    def stop(self) -> None:
-        """停止后台行情轮询线程。"""
+    def stop(self, *, persist_enabled: bool = True) -> None:
+        """停止后台行情轮询线程。
+
+        persist_enabled=False 供进程关闭 (lifespan shutdown) 路径使用: 只停
+        线程, 不把开关持久化为关闭 — preferences 保留用户上次的选择, 重启后
+        boot_check 据此恢复; 用户主动关闭走 disable(), 仍持久化。
+        """
         self._running = False
         self._enabled = False
         if self._thread:
             self._thread.join(timeout=10)
             self._thread = None
-        self._save_enabled(False)
+        if persist_enabled:
+            self._save_enabled(False)
         logger.info("行情服务已停止")
 
     def enable(self) -> bool:

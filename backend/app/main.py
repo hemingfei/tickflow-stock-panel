@@ -458,7 +458,9 @@ async def _application_lifespan(app: FastAPI):
             fsc.stop()
         qs = getattr(app.state, "quote_service", None)
         if qs:
-            qs.stop()
+            # 进程关闭只停线程, 不改 preferences — 重启后 boot_check 恢复用户
+            # 上次的实时行情开关状态
+            qs.stop(persist_enabled=False)
         dsvc = getattr(app.state, "depth_service", None)
         if dsvc:
             dsvc.stop_polling()
