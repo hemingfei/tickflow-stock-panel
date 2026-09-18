@@ -8,6 +8,7 @@ name: Build and Push Docker Image (hmf -> Docker Hub)
 #   - DOCKERHUB_USERNAME: Docker Hub 用户名
 #   - DOCKERHUB_TOKEN:    Docker Hub Access Token
 #     (hub.docker.com → Account Settings → Security → New Access Token, Read/Write 权限)
+#   - JENKINS_URL:        Jenkins 基地址(如 https://jenkins.hegame.tech), 不把实例地址写进仓库
 #   - JENKINS_TOKEN:      Jenkins API Token(云服务器 openclaw 账号), 部署触发用
 on:
   push:
@@ -76,9 +77,13 @@ jobs:
       - name: Trigger Jenkins deploy and watch
         if: ${{ success() }}
         timeout-minutes: 15
+        env:
+          # Jenkins 基地址走 secret（JENKINS_URL）：实例地址与端口属基础设施信息，
+          # 不进仓库；支持 https（当前值 https://jenkins.hegame.tech）与 http（临时）。
+          JENKINS_URL: ${{ secrets.JENKINS_URL }}
         run: |
           set -euo pipefail
-          J="http://106.15.153.53:1180"
+          J="${JENKINS_URL%/}"
           AUTH="openclaw:${{ secrets.JENKINS_TOKEN }}"
           JOB="tickflow-panel-deploy"
 
