@@ -741,6 +741,16 @@ def get_minute_batch(request: Request, body: dict):
     else:
         expected = 240
 
+    # 开盘等待窗 (盘前 9:15 ~ 开盘后 9:35): 前端把窗口内的空分时渲染为
+    # "等待开盘数据" 而非 "暂无数据"。周末/节假日的 trade_date 已回退到
+    # 最近交易日 (!= 今天), 天然不进窗口; 午休/收盘后的空数据是真实缺失。
+    awaiting_open = (
+        trade_date == cn_today()
+        and now.weekday() < 5
+        and (h, m) >= (9, 15)
+        and (h, m) < (9, 35)
+    )
+
     # 本地状态分类 (补拉已改为取到即落盘, 完整性判定随之收紧):
     # - fresh:  根数 >= 期望-2 (时间边界容差), 直接用本地。原 0.9 比例阈值会让
     #           持久化数据在 90% 处冻结尾巴, 必须按根数差判。
@@ -770,10 +780,13 @@ def get_minute_batch(request: Request, body: dict):
     fresh_floor = max(0, expected - 2)
     for sym in symbols:
         sub = local_parts.get(sym, pl.DataFrame())
-        if expected == 0 or sub.height >= fresh_floor:
-            if not sub.is_empty():
-                result[sym] = sub.to_dicts()
+        if expected == 0:
             continue
+        if not sub.is_empty() and sub.height >= fresh_floor:
+            result[sym] = sub.to_dicts()
+            continue
+        # 本地为空不是 fresh (b78ba99 回归): 指数无本地存储, 开盘首分钟
+        # empty + expected<=2 恰好满足根数容差被误判完整, 分时图空白 ~3 分钟
         if sub.is_empty() or _has_holes(sub):
             full_pull.append(sym)
         else:
@@ -876,6 +889,7 @@ def get_minute_batch(request: Request, body: dict):
             "data": result,
             "full_minute_local": full_minute_healthy,
             "incremental": since_dt is not None,
+            "awaiting_open": awaiting_open,
         },
         pref_key="minute_batch_compress",
     )

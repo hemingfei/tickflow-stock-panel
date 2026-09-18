@@ -342,6 +342,7 @@ interface IndexCardProps {
   dailyLoading?: boolean;
   hasMinuteCap: boolean;
   period: PeriodType;
+  awaitingOpen?: boolean;
 }
 
 function IndexCard({
@@ -354,6 +355,7 @@ function IndexCard({
   dailyLoading,
   hasMinuteCap,
   period,
+  awaitingOpen,
 }: IndexCardProps) {
   const current = quote?.last_price ?? quote?.price ?? quote?.close
   const changePct = quote?.change_pct ?? quote?.pct
@@ -423,6 +425,11 @@ function IndexCard({
         <div className="flex h-64 items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-muted" />
           <span className="ml-2 text-xs text-muted">数据加载中…</span>
+        </div>
+      ) : period === "分时" && (!minuteData || minuteData.length === 0) && awaitingOpen ? (
+        <div className="flex h-64 flex-col items-center justify-center gap-2">
+          <Loader2 className="h-5 w-5 animate-spin text-muted" />
+          <span className="text-xs text-muted">等待开盘数据…</span>
         </div>
       ) : period === "分时" && (!minuteData || minuteData.length === 0) ? (
         <div className="flex h-64 items-center justify-center text-xs text-muted">
@@ -664,6 +671,7 @@ export function LiveIndices() {
             dailyLoading={dailyQueries.isPending}
             hasMinuteCap={hasMinuteCap}
             period={periods[index.symbol] || "1"}
+            awaitingOpen={batchMinute.data?.awaiting_open}
           />
         ))}
       </div>

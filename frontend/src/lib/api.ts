@@ -2676,7 +2676,7 @@ export const api = {  health: () => request<{ status: string; version: string; m
       body: JSON.stringify({ symbols, days }),
     }),
   klineMinuteBatch: (symbols: string[], date?: string, preferLocal?: boolean, since?: string) =>
-    request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean }>('/api/kline/minute-batch', {
+    request<{ data: Record<string, MinuteKlineRow[]>; full_minute_local?: boolean; incremental?: boolean; awaiting_open?: boolean }>('/api/kline/minute-batch', {
       method: 'POST',
       body: JSON.stringify({ symbols, date, ...(preferLocal ? { prefer_local: true } : {}), ...(since ? { since } : {}) }),
     }),
