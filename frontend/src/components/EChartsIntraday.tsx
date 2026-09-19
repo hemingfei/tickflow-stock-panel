@@ -58,6 +58,12 @@ interface Props {
   showAvgLine?: boolean
   /** 是否为指数（指数的成交量单位是股，不需要乘以100） */
   isIndex?: boolean
+  /**
+   * 实时合成点: 当前分钟的最新价 (来自实时快照, 非分钟K)。
+   * 画在 time 对应的全天槽位上, 供秒级实时尾巴; 该分钟的真实K到达后
+   * 槽位被覆盖, 自然衔接。time 为 "HH:MM" 北京墙钟。
+   */
+  liveMinute?: { time: string; close: number }
 }
 
 function computeAvgPrice(data: MinuteKlineRow[], isIndex = false): (number | null)[] {
@@ -113,7 +119,7 @@ function getLimitPrices(prevClose: number, priceLimit?: PriceLimitInfo): {
   return { limitUp, limitDown, upPct, downPct }
 }
 
-function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: (number | null)[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, isIndex = false, priceLines: Props['priceLines'] = []): EChartsOption {
+function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgPrices: (number | null)[], lineColor: string, areaColor: string, yMode: YMode, ct: ChartTheme, priceLimit?: PriceLimitInfo, showLimitLines = true, showAvgLine = true, isIndex = false, priceLines: Props['priceLines'] = [], liveMinute?: Props['liveMinute']): EChartsOption {
   // 对于指数，默认不显示均价线
   const effectiveShowAvgLine = isIndex ? false : showAvgLine
   // 将数据映射到全天时间轴上的正确位置
@@ -150,6 +156,18 @@ function buildOption(data: MinuteKlineRow[], prevClose: number | undefined, avgP
         },
       }
       prevRef = data[i].close
+    }
+  }
+
+  // 实时合成点: 当前分钟尚无真实K时, 用快照最新价占住槽位画秒级尾巴;
+  // 已有真实K (形成中的动态K) 则不覆盖 — 权威数据优先。
+  // 合成点通过写入 closes/highs/lows 自然参与下方 Y 轴范围计算。
+  if (liveMinute && isValidPrice(liveMinute.close)) {
+    const idx = timeIndexMap.get(liveMinute.time)
+    if (idx !== undefined && closes[idx] == null) {
+      closes[idx] = liveMinute.close
+      highs[idx] = liveMinute.close
+      lows[idx] = liveMinute.close
     }
   }
 
@@ -469,6 +487,7 @@ export function EChartsIntraday({
   showLimitLines = true,
   showAvgLine = true,
   isIndex = false,
+  liveMinute,
 }: Props) {
   // 对于指数，默认不显示均价线，因为指数本身就是一个加权价格
   const effectiveShowAvgLine = isIndex ? false : showAvgLine
@@ -477,10 +496,6 @@ export function EChartsIntraday({
   const roRef = useRef<ResizeObserver | null>(null)
   const moRef = useRef<MutationObserver | null>(null)
   const priceDoubleClickHandlerRef = useRef<((event: { offsetX: number; offsetY: number }) => void) | null>(null)
-  const dataRef = useRef(data)
-  dataRef.current = data
-  const currentPriceRef = useRef(currentPrice)
-  currentPriceRef.current = currentPrice
   const onPriceHoverRef = useRef(onPriceHover)
   onPriceHoverRef.current = onPriceHover
   const onPriceDoubleClickRef = useRef(onPriceDoubleClick)
@@ -493,11 +508,31 @@ export function EChartsIntraday({
   const ct = useChartTheme()
   const priceColors = usePriceColors()
   const avgPrices = useMemo(() => computeAvgPrice(data, isIndex), [data, isIndex])
-  const summary = useMemo(() => summarizeMinutes(data), [data])
 
-  // 分时线颜色：基于最新价 vs 昨收
+  // 合成点有效性: 该分钟还没有真实K时才生效 (与 buildOption 的覆盖规则一致)。
+  // 生效时并入展示序列 — 图上最后一个点、信息条汇总都跟实时价走。
+  const liveMinuteEffective = useMemo(() => {
+    if (!liveMinute || !Number.isFinite(liveMinute.close) || liveMinute.close <= 0) return null
+    if (data.some((row) => formatMinuteTime(row.datetime) === liveMinute.time)) return null
+    return liveMinute
+  }, [liveMinute, data])
+  // 展示序列: 真实K + 合成尾巴。合成点 volume 未知, 不画量柱 (buildOption
+  // 的 volumes 槽位保持 null), 真实K到达后自然接管。
+  const displayData = useMemo<MinuteKlineRow[]>(
+    () => liveMinuteEffective
+      ? [...data, { datetime: `2000-01-01 ${liveMinuteEffective.time}:00`, open: null as unknown as number, high: liveMinuteEffective.close, low: liveMinuteEffective.close, close: liveMinuteEffective.close, volume: 0, amount: null as unknown as number }]
+      : data,
+    [data, liveMinuteEffective],
+  )
+  const displaySummary = useMemo(() => summarizeMinutes(displayData), [displayData])
+  // 事件回调读取的实时数据 = 展示序列 (含合成尾巴)
+  const dataRef = useRef(displayData)
+  dataRef.current = displayData
+  const currentPriceRef = useRef(currentPrice)
+  currentPriceRef.current = currentPrice
+  // 分时线颜色：基于最新价 (含合成尾巴) vs 昨收
   const THEME = getTHEME()
-  const lastClose = data.length > 0 ? data[data.length - 1].close : null
+  const lastClose = displayData.length > 0 ? displayData[displayData.length - 1].close : null
   const lineIsUp = lastClose != null && prevClose != null ? lastClose > prevClose : true
   const lineIsFlat = lastClose != null && prevClose != null ? lastClose === prevClose : false
   const lineColor = lineIsFlat ? '#A1A1AA' : lineIsUp ? THEME.bull : THEME.bear
@@ -574,12 +609,12 @@ export function EChartsIntraday({
       chart.getZr().on('dblclick', handlePriceDoubleClick)
     }
 
-    if (data.length > 0) {
-      // 构建全日索引 → 数据索引 的映射
+    if (displayData.length > 0) {
+      // 构建全日索引 → 数据索引 的映射 (基于展示序列, 含合成尾巴)
       const timeIndexMap = new Map(FULL_DAY_TIMES.map((t, i) => [t, i]))
       const mapping = new Map<number, number>()
-      for (let i = 0; i < data.length; i++) {
-        const timeKey = formatMinuteTime(data[i].datetime)
+      for (let i = 0; i < displayData.length; i++) {
+        const timeKey = formatMinuteTime(displayData[i].datetime)
         const fullDayIdx = timeIndexMap.get(timeKey)
         if (fullDayIdx !== undefined) {
           mapping.set(fullDayIdx, i)
@@ -587,12 +622,12 @@ export function EChartsIntraday({
       }
       fullDayToDataIdx.current = mapping
 
-      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, isIndex, priceLines), true)
+      chart.setOption(buildOption(data, prevClose, avgPrices, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, isIndex, priceLines, liveMinute), true)
     } else {
       fullDayToDataIdx.current = new Map()
       chart.clear()
     }
-  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceColors, isIndex, priceLines])
+  }, [data, prevClose, height, lineColor, areaFill, yMode, ct, priceLimit, showLimitLines, showAvgLine, priceColors, isIndex, priceLines, liveMinute, displayData])
 
   useEffect(() => {
     return () => {
@@ -610,10 +645,10 @@ export function EChartsIntraday({
     }
   }, [])
 
-  const hovered = infoIdx >= 0 && infoIdx < data.length ? data[infoIdx] : null
-  const d = hovered ?? summary
+  const hovered = infoIdx >= 0 && infoIdx < displayData.length ? displayData[infoIdx] : null
+  const d = hovered ?? displaySummary
   const daily = dailySummary?.date === date ? dailySummary : undefined
-  const ohlc = hovered ?? daily ?? summary
+  const ohlc = hovered ?? daily ?? displaySummary
   const avg = d != null ? avgPrices[hovered ? infoIdx : data.length - 1] : null
   const chg = d && prevClose != null ? d.close - prevClose : null
   const isUp = chg != null ? chg > 0 : true
@@ -659,9 +694,9 @@ export function EChartsIntraday({
               <span className="text-muted">开</span>
               <span style={{ color: priceClr }}>{ohlc.open != null ? ohlc.open.toFixed(2) : '—'}</span>
               <span className="text-muted">高</span>
-              <span style={{ color: priceClr }}>{ohlc.high.toFixed(2)}</span>
+              <span style={{ color: priceClr }}>{ohlc.high != null ? ohlc.high.toFixed(2) : '—'}</span>
               <span className="text-muted">低</span>
-              <span style={{ color: priceClr }}>{ohlc.low.toFixed(2)}</span>
+              <span style={{ color: priceClr }}>{ohlc.low != null ? ohlc.low.toFixed(2) : '—'}</span>
               <span className="text-muted">收</span>
               <span style={{ color: priceClr }} className="font-semibold">{ohlc.close.toFixed(2)}</span>
             </>
@@ -680,9 +715,9 @@ export function EChartsIntraday({
                 <span style={{ color: getTHEME().avgLine }}>{avg != null ? avg.toFixed(2) : '—'}</span>
               </span>}
               <span className="text-muted">{hovered ? '量' : '累计量'}</span>
-              <span className="text-secondary">{d.volume.toFixed(0)}</span>
+              <span className="text-secondary">{hovered != null || !liveMinuteEffective ? d.volume.toFixed(0) : '—'}</span>
               <span className="text-muted">{hovered ? '额' : '累计额'}</span>
-              <span className="text-secondary">{fmtAmt(d.amount)}</span>
+              <span className="text-secondary">{hovered != null || !liveMinuteEffective ? fmtAmt(d.amount) : '—'}</span>
               {prevClose != null && (
                 <>
                   <span className="text-muted">涨跌</span>

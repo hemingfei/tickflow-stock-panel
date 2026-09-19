@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Activity, Loader2, Lock, RefreshCw, LayoutGrid } from "lucide-react";
 import { api, type IndexQuote, type MinuteKlineRow, type KlineRow } from "@/lib/api";
 import { QK } from "@/lib/queryKeys";
-import { useCapabilities } from "@/lib/useSharedQueries";
+import { useCapabilities, useQuoteInterval } from "@/lib/useSharedQueries";
 import { EChartsIntraday } from "@/components/EChartsIntraday";
 import { EChartsCandlestick, type OHLC } from "@/components/EChartsCandlestick";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -343,6 +343,8 @@ interface IndexCardProps {
   hasMinuteCap: boolean;
   period: PeriodType;
   awaitingOpen?: boolean;
+  /** 实时合成点: 当前分钟的最新价 (来自实时快照), 分时图秒级尾巴 */
+  liveMinute?: { time: string; close: number };
 }
 
 function IndexCard({
@@ -356,6 +358,7 @@ function IndexCard({
   hasMinuteCap,
   period,
   awaitingOpen,
+  liveMinute,
 }: IndexCardProps) {
   const current = quote?.last_price ?? quote?.price ?? quote?.close
   const changePct = quote?.change_pct ?? quote?.pct
@@ -426,12 +429,12 @@ function IndexCard({
           <Loader2 className="h-5 w-5 animate-spin text-muted" />
           <span className="ml-2 text-xs text-muted">数据加载中…</span>
         </div>
-      ) : period === "分时" && (!minuteData || minuteData.length === 0) && awaitingOpen ? (
+      ) : period === "分时" && (!minuteData || minuteData.length === 0) && awaitingOpen && !liveMinute ? (
         <div className="flex h-64 flex-col items-center justify-center gap-2">
           <Loader2 className="h-5 w-5 animate-spin text-muted" />
           <span className="text-xs text-muted">等待开盘数据…</span>
         </div>
-      ) : period === "分时" && (!minuteData || minuteData.length === 0) ? (
+      ) : period === "分时" && (!minuteData || minuteData.length === 0) && !liveMinute ? (
         <div className="flex h-64 items-center justify-center text-xs text-muted">
           暂无数据
         </div>
@@ -444,6 +447,7 @@ function IndexCard({
             showLimitLines={false}
             showAvgLine={false}
             isIndex={true}
+            liveMinute={liveMinute}
           />
         </div>
       ) : isMinutePeriod ? (
@@ -493,11 +497,17 @@ export function LiveIndices() {
   const caps = useCapabilities();
   const hasMinuteCap = !!caps.data?.capabilities?.["kline.minute.batch"];
 
+  // 指数快照轮询节奏跟随行情服务间隔 (设置-刷新间隔): 后端缓存按该间隔刷新,
+  // 前端刷更快只是重复读同一值。取 min(5s, interval) — 默认 6s 时维持 5s,
+  // 用户调到 1s 时前端自动跟上, 驱动分时图合成点的秒级尾巴。
+  const { data: quoteIntervalCfg } = useQuoteInterval();
+  const quotesRefetchMs = Math.min(5000, Math.max(1000, (quoteIntervalCfg?.interval ?? 6) * 1000));
+
   const quotes = useQuery({
     queryKey: QK.indexQuotes,
     queryFn: () => api.indexQuotes(CORE_INDICES.map((i) => i.symbol)),
     placeholderData: (prev) => prev,
-    refetchInterval: 5000,
+    refetchInterval: quotesRefetchMs,
     refetchOnWindowFocus: false,
   });
 
@@ -534,6 +544,27 @@ export function LiveIndices() {
     for (const q of quotes.data?.rows ?? []) m.set(q.symbol, q);
     return m;
   }, [quotes.data?.rows]);
+
+  // 分时图秒级尾巴: 当前分钟 (北京墙钟) 尚无真实K时, 用快照最新价合成一个点。
+  // 槽位取下一分钟 — 分钟K按结束时间标号, 10:01:23 属于标号 10:02 的形成中K。
+  // 只在快照数据"新鲜"(来自当日实时源而非昨收兜底)时合成, 避免把昨收盘
+  // 画成今天的第一根线。
+  const liveMinuteBySymbol = useMemo(() => {
+    const m = new Map<string, { time: string; close: number }>();
+    if (quotes.data?.source !== "realtime") return m;
+    const now = new Date();
+    const nextMinute = new Date(now.getTime() + 60000);
+    const hh = String(nextMinute.getHours()).padStart(2, "0");
+    const mm = String(nextMinute.getMinutes()).padStart(2, "0");
+    const slot = `${hh}:${mm}`;
+    for (const q of quotes.data?.rows ?? []) {
+      const price = q?.last_price ?? q?.price ?? q?.close;
+      if (typeof price === "number" && Number.isFinite(price) && price > 0) {
+        m.set(q.symbol, { time: slot, close: price });
+      }
+    }
+    return m;
+  }, [quotes.data]);
 
   const minuteBySymbol = useMemo(() => {
     const m = new Map<string, MinuteKlineRow[]>();
@@ -672,6 +703,7 @@ export function LiveIndices() {
             hasMinuteCap={hasMinuteCap}
             period={periods[index.symbol] || "1"}
             awaitingOpen={batchMinute.data?.awaiting_open}
+            liveMinute={liveMinuteBySymbol.get(index.symbol)}
           />
         ))}
       </div>

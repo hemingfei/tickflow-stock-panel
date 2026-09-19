@@ -2481,7 +2481,7 @@ export const api = {  health: () => request<{ status: string; version: string; m
     ),
   intradayRefresh: () => request<{ status: string }>('/api/intraday/refresh', { method: 'POST' }),
   indexQuotes: (symbols?: string[]) =>
-    request<{ rows: IndexQuote[]; count: number }>(
+    request<{ rows: IndexQuote[]; count: number; source?: 'realtime' | 'index_daily' }>(
       `/api/intraday/indices${symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(','))}` : ''}`,
     ),
   updateRealtimeMonitorConfig: (cfg: {
