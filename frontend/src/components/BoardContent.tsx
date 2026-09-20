@@ -6,7 +6,7 @@ import type { AlertEvent, MarketSnapshotRow, OverviewDimensionRankItem, Overview
 import { fmtBigNum, fmtPct } from '@/lib/format'
 import { dimensionKindForSourceField, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { SealedBadge } from '@/components/SealedBadge'
-import { toNavItems, type NavItem } from '@/components/StockPreviewDialog'
+import { toNavItems, type NavItem } from '@/lib/listNav'
 import { cn } from '@/lib/cn'
 import { cnSignal } from '@/lib/signals'
 import { useCustomSignalNames } from '@/lib/useCustomSignalNames'
