@@ -300,7 +300,7 @@ def test_get_minute_batch_splits_stock_and_etf(monkeypatch):
     from app.api import kline as kline_api
 
     # mock sync_minute_batch: stock 返回 df_s, etf 返回 df_e (不同 symbol 便于 concat 后 filter 验证)
-    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type, raw_basis=False):
         if asset_type == "stock":
             return _mock_minute_df(symbol="600519.SH")
         if asset_type == "etf":
@@ -356,7 +356,7 @@ def _endpoint_mocks(monkeypatch, local_df: pl.DataFrame, sync_ret: pl.DataFrame 
 
     captured: list[dict] = []
 
-    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type, raw_basis=False):
         captured.append({"symbols": list(symbols), "start": start_time, "asset": asset_type})
         return sync_ret if sync_ret is not None else pl.DataFrame()
 
@@ -1336,7 +1336,7 @@ def test_minute_batch_index_pulled_via_index_path_without_persist(monkeypatch):
 
     idx_bars = _bars("000001.SH", [datetime(2026, 1, 15, 9, 31), datetime(2026, 1, 15, 9, 32)])
 
-    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type, raw_basis=False):
         if asset_type == "index":
             return idx_bars
         return pl.DataFrame()
@@ -1381,7 +1381,7 @@ def test_minute_batch_mixed_assets_split_correctly(monkeypatch):
     """stock/ETF/指数混批: 三路各自以正确 asset_type 补拉, 指数不落盘。"""
     from app.api import kline as kline_api
 
-    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type):
+    def fake_sync(symbols, *, start_time, end_time, batch_size, rpm, asset_type, raw_basis=False):
         symbol_map = {"stock": "600519.SH", "etf": "510300.SH", "index": "000001.SH"}
         return _bars(symbol_map[asset_type], [datetime(2026, 1, 15, 9, 31)])
     sync_spy = MagicMock(side_effect=fake_sync)
