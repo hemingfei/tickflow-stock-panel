@@ -28,6 +28,11 @@ const PERIODS: { value: PeriodType; label: string }[] = [
   { value: "M", label: "月K" },
 ];
 
+// 界面偏好持久化 (localStorage): 布局列数与统一周期, 再次进入页面时恢复;
+// 读取失败或值非法时回退默认 (1行3个 / 分时)。
+const GRID_COLS_KEY = "live-indices-grid-cols";
+const PERIOD_KEY = "live-indices-period";
+
 // Moving average periods we need to calculate
 const MA_PERIODS = [5, 8, 13, 55, 60, 65, 120];
 
@@ -347,6 +352,26 @@ interface IndexCardProps {
   liveMinute?: { time: string; close: number };
 }
 
+// 布局列数合法值: 1-4 的整数; localStorage 中的历史/手改值非法时回退默认 3。
+function loadGridCols(): number {
+  try {
+    const v = Number.parseInt(localStorage.getItem(GRID_COLS_KEY) ?? "", 10);
+    return v >= 1 && v <= 4 ? v : 3;
+  } catch {
+    return 3;
+  }
+}
+
+// 周期合法值: PERIODS 清单; 非法值回退默认 "分时"。
+function loadPeriod(): PeriodType {
+  try {
+    const v = localStorage.getItem(PERIOD_KEY);
+    return PERIODS.some((p) => p.value === v) ? (v as PeriodType) : "分时";
+  } catch {
+    return "分时";
+  }
+}
+
 function IndexCard({
   symbol,
   name,
@@ -478,19 +503,16 @@ function IndexCard({
 export function LiveIndices() {
   const qc = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [gridCols, setGridCols] = useState(3); // 默认1行3个
-  const [periods, setPeriods] = useState<Record<string, PeriodType>>({
-    "000001.SH": "分时",
-    "399001.SZ": "分时",
-    "399006.SZ": "分时",
-    "000680.SH": "分时",
+  const [gridCols, setGridCols] = useState<number>(loadGridCols); // 默认1行3个, 恢复上次选择
+  const [periods, setPeriods] = useState<Record<string, PeriodType>>(() => {
+    const period = loadPeriod();
+    return Object.fromEntries(CORE_INDICES.map((i) => [i.symbol, period]));
   });
 
   const toggleLayout = () => {
-    setGridCols(prev => {
-      if (prev === 4) return 1;
-      return prev + 1;
-    });
+    const next = gridCols === 4 ? 1 : gridCols + 1;
+    setGridCols(next);
+    try { localStorage.setItem(GRID_COLS_KEY, String(next)); } catch { /* 私隐模式等场景静默 */ }
   };
 
   //分时数据需 Pro+ (kline.minute.batch) 能力
@@ -609,6 +631,7 @@ export function LiveIndices() {
       newPeriods[index.symbol] = period;
     });
     setPeriods(newPeriods);
+    try { localStorage.setItem(PERIOD_KEY, period); } catch { /* 私隐模式等场景静默 */ }
   };
 
   // 获取网格布局类名
