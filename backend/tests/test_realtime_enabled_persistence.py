@@ -3,7 +3,7 @@
 进程关闭 (main.py lifespan shutdown) 调 qs.stop(), 旧实现无条件把
 realtime_quotes_enabled 写成 False, 覆盖用户上次的开启状态; 重启后
 boot_check 读到 False, 实时行情总是关闭。修复后进程关闭只停线程
-(stop(persist_enabled=False)), 开关以用户在设置页的选择为准;
+(stop() 不再写 preferences), 开关以用户在设置页的选择为准;
 用户主动关闭仍走 disable() 持久化为 False。
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ def test_shutdown_stop_keeps_enabled_preference(pref_store, allow_realtime):
     assert qs.enable() is True
     assert store["realtime_quotes_enabled"] is True
 
-    qs.stop(persist_enabled=False)  # main.py lifespan shutdown 路径
+    qs.stop()  # main.py lifespan shutdown 路径
 
     assert qs._running is False
     assert qs._enabled is False
@@ -65,7 +65,7 @@ def test_restart_restores_enabled_state(pref_store, allow_realtime):
     store, _ = pref_store
     qs = QuoteService()
     assert qs.enable() is True
-    qs.stop(persist_enabled=False)
+    qs.stop()
 
     rebooted = QuoteService()
     rebooted.boot_check()
