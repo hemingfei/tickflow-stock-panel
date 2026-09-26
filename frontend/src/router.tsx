@@ -24,6 +24,7 @@ const Financials = lazy(() => import('./pages/Financials').then(m => ({ default:
 const Data = lazy(() => import('./pages/Data').then(m => ({ default: m.Data })))
 const Monitor = lazy(() => import('./pages/Monitor').then(m => ({ default: m.Monitor })))
 const Lots = lazy(() => import('./pages/Lots').then(m => ({ default: m.Lots })))
+const Paper = lazy(() => import('./pages/Paper').then(m => ({ default: m.Paper })))
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })))
 const BoardReplay = lazy(() => import('./pages/BoardReplay').then(m => ({ default: m.BoardReplay })))
 // 免登录公开回放页: 无应用外壳, 与站内回溯共用组件 (后端剥离个人告警)
@@ -180,6 +181,7 @@ export const router = createBrowserRouter([
       { path: 'data', element: <Data /> },
       { path: 'monitor', element: <Monitor /> },
       { path: 'lots', element: <Lots /> },
+      { path: 'paper', element: <Paper /> },
       { path: 'signals', element: <Signals /> },
       { path: 'limit-ladder', element: <LimitUpLadder /> },
       { path: 'indices', element: <Indices /> },

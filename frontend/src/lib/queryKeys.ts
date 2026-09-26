@@ -82,6 +82,7 @@ export const QK = {
 
   // Backtest
   backtestStatus:       ['backtest-status'] as const,
+  backtestCandidates:   ['backtest-candidates'] as const,
   factorColumns:        ['backtest-factor-columns'] as const,
   factorLibrary:        (assetType: string) => ['factors-library', assetType] as const,
   miningRuns:           ['backtest-mining-runs'] as const,
@@ -136,6 +137,17 @@ export const QK = {
   monitorRuleOptions:   ['monitor-rule-options'] as const,
   lots:                 ['lots'] as const,
   lotsKline:            (symbols: string) => ['lots-kline', symbols] as const,
+
+  // 模拟盘 (多账户: 键按账户隔离; paperAll 作账户无关失效前缀)
+  paperAll:             ['paper'] as const,
+  paperAccounts:        ['paper', 'accounts'] as const,
+  paperOverview:        (acc: string) => ['paper', 'overview', acc] as const,
+  paperOrders:          (acc: string) => ['paper', 'orders', acc] as const,
+  paperTrades:          (acc: string) => ['paper', 'trades', acc] as const,
+  paperNav:             (acc: string) => ['paper', 'nav', acc] as const,
+  paperStats:           (acc: string) => ['paper', 'stats', acc] as const,
+  paperCompare:         ['paper', 'compare'] as const,
+  paperAutoRules:       (acc: string) => ['paper', 'auto-rules', acc] as const,
   alerts:               (source?: string) => ['alerts', source ?? ''] as const,
 
   // AI 大盘复盘
@@ -185,6 +197,7 @@ export const SSE_INVALIDATE_PREFIXES = [
   'overview-market',
   'limit-ladder',
   // 概念/行业分析、维度成员弹窗的全市场快照 (['market-snapshot']): 盘中随 enriched
-  // 变化, 此前只有 60s staleTime, 页面打开期间冻结。后端有 3s TTL 缓存兜成本。
+  // 变化, 此前只有 60s staleTime, 页面打开期间冻结。后端有 3s TTL 缓存兜成本,
+  // 仅对应页面打开时才实际发请求。
   'market-snapshot',
 ] as const

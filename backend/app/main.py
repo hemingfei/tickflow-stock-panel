@@ -30,6 +30,7 @@ from app.api import (
     mining,
     monitor_rules,
     overview,
+    paper,
     pipeline,
     price_query,
     regime,
@@ -574,6 +575,7 @@ app.include_router(indices.router)
 app.include_router(overview.router)
 app.include_router(board_snapshots.router)
 app.include_router(board_snapshots.public_router)
+app.include_router(paper.router)
 app.include_router(abnormal.router)
 app.include_router(regime.router)
 app.include_router(sentiment.router)
