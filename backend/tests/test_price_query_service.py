@@ -12,6 +12,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from app.market_time import CN_TZ
 from app.services import price_query as pq
 from app.tickflow.repository import DataStore, KlineRepository
 
@@ -319,7 +320,8 @@ def test_latest_price_uses_enriched_today(tmp_path):
 
     class _LiveRepo(_Repo):
         def get_enriched_latest(self):
-            ts_ms = int(datetime(2026, 9, 1, 10, 47, 12).timestamp() * 1000)
+            # 挂 CN_TZ: naive timestamp() 按机器时区解释, UTC runner 会偏 8 小时
+            ts_ms = int(datetime(2026, 9, 1, 10, 47, 12, tzinfo=CN_TZ).timestamp() * 1000)
             df = pl.DataFrame({
                 "symbol": [SYMBOL], "close": [1453.6], "quote_ts": [ts_ms],
             })

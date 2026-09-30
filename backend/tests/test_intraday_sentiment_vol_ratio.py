@@ -12,7 +12,7 @@ from pathlib import Path
 
 import polars as pl
 
-from app.market_time import trading_minutes_elapsed_from_dt
+from app.market_time import CN_TZ, trading_minutes_elapsed_from_dt
 from app.services.intraday_sentiment import (
     _apply_vol_ratio_time_factor,
     _intraday_elapsed_minutes,
@@ -44,8 +44,12 @@ def _mk_today_df(quote_ts_ms: list[int | None]) -> pl.DataFrame:
 
 
 def _ts(h: int, m: int, s: int = 0) -> int:
-    """北京时间墙钟 → 毫秒时间戳 (与 quote_ts 存储口径一致)。"""
-    return int(datetime(2026, 9, 3, h, m, s).timestamp() * 1000)
+    """北京时间墙钟 → 毫秒时间戳 (与 quote_ts 存储口径一致)。
+
+    必须显式挂 CN_TZ: naive timestamp() 按运行机器时区解释, CI 的 UTC
+    runner 会偏 8 小时导致收盘后 elapsed=240。
+    """
+    return int(datetime(2026, 9, 3, h, m, s, tzinfo=CN_TZ).timestamp() * 1000)
 
 
 def test_fold_at_morning_midway() -> None:

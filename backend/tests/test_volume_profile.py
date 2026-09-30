@@ -12,7 +12,7 @@ from pathlib import Path
 
 import polars as pl
 
-from app.market_time import trading_minutes_elapsed_from_dt
+from app.market_time import CN_TZ, trading_minutes_elapsed_from_dt
 from app.services import volume_profile as vp
 
 TODAY = date(2026, 9, 3)
@@ -114,8 +114,9 @@ def test_calibration_sides_equivalent(tmp_path: Path) -> None:
 
 def test_elapsed_from_quote_ts_median() -> None:
     """中位数取真实成交时间口径; 全缺失回退 None (由调用方兜底服务端时间)。"""
-    ts = [int(datetime(2026, 9, 3, 10, 30).timestamp() * 1000),
-          int(datetime(2026, 9, 3, 10, 40).timestamp() * 1000)]
+    # 挂 CN_TZ 构造北京墙钟时间戳: naive timestamp() 按机器时区解释, UTC runner 偏 8 小时
+    ts = [int(datetime(2026, 9, 3, 10, 30, tzinfo=CN_TZ).timestamp() * 1000),
+          int(datetime(2026, 9, 3, 10, 40, tzinfo=CN_TZ).timestamp() * 1000)]
     elapsed = vp.elapsed_minutes_from_quote_ts([*ts, None])
     assert elapsed == trading_minutes_elapsed_from_dt(datetime(2026, 9, 3, 10, 35))
     assert vp.elapsed_minutes_from_quote_ts([None, 0]) is None
