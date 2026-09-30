@@ -1,22 +1,27 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowUpRight, Database, Gauge, Loader2, Play, RefreshCw, Sparkles, Timer } from 'lucide-react'
+import { ArrowUpRight, Check, Database, Gauge, GripVertical, Info, Loader2, Play, RefreshCw, RotateCcw, Sparkles, Timer } from 'lucide-react'
 import { DatePicker } from '@/components/DatePicker'
 import { api, type AlertEvent } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { DimensionMembersDialog, type DimensionMembersTarget } from '@/components/DimensionMembersDialog'
 import { useDataStatus, useCapabilities, useSettings, usePreferences } from '@/lib/useSharedQueries'
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
-import { type NavItem } from '@/lib/listNav'
+import type { NavItem } from '@/lib/listNav'
 import { SettingsModal } from '@/components/data/SettingsModal'
 import { useAdjFactorSyncGate } from '@/components/AdjFactorSyncGate'
 import { STAGE_LABELS } from '@/components/data/ActiveJobCard'
-import { BoardContent, scoreColor, type BoardSource } from '@/components/BoardContent'
+import { scoreColor, quoteAge } from '@/components/dashboard/shared'
+import { DashboardGrid } from '@/components/dashboard/DashboardGrid'
+import { AddWidgetPanel } from '@/components/dashboard/AddWidgetPanel'
+import { useDashboardLayout } from '@/components/dashboard/useDashboardLayout'
+import { DEFAULT_LAYOUT, widgetDef, type WidgetCtx } from '@/components/dashboard/registry'
+import { cloneItems, GRID_COLS, type WidgetType } from '@/components/dashboard/layout'
 
-// 看板主体渲染 (指数/KPI/榜单/涨停梯队/监控中心) 抽离至 components/BoardContent.tsx,
-// 与「看板回溯」页共用同一渲染来源, 保证回放内容与实时看板一致。
+/** 打开个股预览的来源榜 (用于行高亮与切股导航列表) */
+type PreviewSource = 'gain' | 'loss' | 'amount' | 'active' | 'concept' | 'industry' | 'alert'
 
 export function Dashboard() {
   const qc = useQueryClient()
@@ -27,12 +32,31 @@ export function Dashboard() {
     name?: string
     alert?: AlertEvent
     /** 打开来源榜: 仅高亮来源榜的行 */
-    source?: BoardSource
+    source?: PreviewSource
     /** 切股导航列表 (来自来源榜) */
     navList?: NavItem[]
   } | null>(null)
   // 板块成分股弹窗 (概念/行业热度卡片行点击)
   const [dimensionTarget, setDimensionTarget] = useState<DimensionMembersTarget | null>(null)
+  // 自定义网格布局(持久化 hook: 后端偏好加载 + 本地改动防抖落盘);
+  // 注意必须在早退 return 之前 — Hooks 顺序不可随数据加载状态变化。
+  const { items: dashItems, setItems: setDashItems } = useDashboardLayout()
+  // 布局编辑态: 入口与控制组(添加组件/恢复默认/完成)在头部「重载」右侧
+  const [dashEditing, setDashEditing] = useState(false)
+  const placedTypes = useMemo(() => new Set(dashItems.map(it => it.t)), [dashItems])
+  const resetDashLayout = useCallback(() => {
+    setDashItems(cloneItems(DEFAULT_LAYOUT))
+  }, [setDashItems])
+  /** 追加组件: 放到当前布局最底部; ext-link 用唯一 id 支持多实例 */
+  const addDashWidget = useCallback((t: WidgetType, props?: Record<string, string>) => {
+    const def = widgetDef(t)
+    if (!def) return
+    // 内置组件单实例: 已存在则忽略
+    if (t !== 'ext-link' && dashItems.some(it => it.t === t)) return
+    const maxY = dashItems.reduce((m, it) => Math.max(m, it.y + it.h), 0)
+    const id = t === 'ext-link' ? `ext-link-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}` : t
+    setDashItems([...dashItems, { i: id, t, x: 0, y: maxY, w: Math.min(def.defW, GRID_COLS), h: def.defH, p: props }])
+  }, [dashItems, setDashItems])
   // 首次使用(无数据 + 未完成引导)自动弹窗: 同一会话只弹一次
   const [showWelcomeModal, setShowWelcomeModal] = useState(false)
   const dataStatus = useDataStatus({ staleTime: 60_000 })
@@ -47,12 +71,7 @@ export function Dashboard() {
   const settings = useSettings()
   const hasDepth = !!caps.data?.capabilities?.['depth5.batch']
   const sealedReady = !!data?.limit?.sealed_ready
-  // 监控中心小组件的告警轮询 (BoardContent 只负责渲染)
-  const alerts = useQuery({
-    queryKey: ['alerts', ''],
-    queryFn: () => api.alertsList({ days: 7, limit: 10 }),
-    refetchInterval: 10000,
-  })
+  const isSealedDegrade = !hasDepth || !sealedReady
   // 空态引导文案按当前数据源分流: TickFlow 源提"免费服务器", 其他源提"当前数据源",
   // 弱化与默认 TickFlow 的隐式绑定 (None 档/免费 Key 等 TickFlow 概念仅在其被选中时出现)
   const prefs = usePreferences()
@@ -165,6 +184,25 @@ export function Dashboard() {
   const latestDate = dataStatus.data?.enriched?.latest_date ?? null
   const currentDate = selectedDate ?? data.as_of ?? ''
   const quoteRunning = (!selectedDate || selectedDate === latestDate) && data.quote_status?.running
+  // 实时模式: none / watchlist / full_market。
+  // watchlist 模式仅自选 ≤5 只实时, 看板呈现的大盘数据实为盘后快照, 需提示避免误读。
+  const quoteMode = data.quote_status?.mode as ('none' | 'watchlist' | 'full_market') | undefined
+
+  // 网格组件渲染上下文: 数据切片 + 交互回调统一由页面层供给
+  const widgetCtx: WidgetCtx = {
+    data,
+    score,
+    hasDepth,
+    sealedReady,
+    isSealedDegrade,
+    activeSymbol: source => (previewStock?.source === source ? previewStock.symbol : undefined),
+    openStock: (source, symbol, name, navList) =>
+      setPreviewStock({ symbol, name, navList, source: source as PreviewSource }),
+    openDimension: setDimensionTarget,
+    openAlert: (event, navList) => {
+      if (event.symbol) setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event, source: 'alert', navList })
+    },
+  }
 
   return (
     <div className="min-h-full bg-base p-1.5">
@@ -236,22 +274,47 @@ export function Dashboard() {
           >
             <RefreshCw className={`h-3 w-3 ${manualFetching ? 'animate-spin' : ''}`} />重载
           </button>
+          {!dashEditing ? (
+            <button
+              onClick={() => setDashEditing(true)}
+              title="拖拽调整组件位置与宽高"
+              className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground hover:border-accent/40"
+            >
+              <GripVertical className="h-3 w-3" />自定义布局
+            </button>
+          ) : (
+            <>
+              <AddWidgetPanel placedTypes={placedTypes} onAdd={addDashWidget} />
+              <button
+                onClick={resetDashLayout}
+                className="inline-flex items-center gap-1 rounded-btn border border-border bg-elevated px-2 py-1 text-[11px] text-secondary transition-colors hover:text-foreground"
+              >
+                <RotateCcw className="h-3 w-3" />恢复默认
+              </button>
+              <button
+                onClick={() => setDashEditing(false)}
+                className="inline-flex items-center gap-1 rounded-btn bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-accent/90"
+              >
+                <Check className="h-3 w-3" />完成
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      <BoardContent
-        data={data}
-        alerts={alerts.data?.alerts ?? []}
-        hasDepth={hasDepth}
-        sealedReady={sealedReady}
-        activeSource={previewStock?.source}
-        activeSymbol={previewStock?.symbol}
-        onStockClick={(source, symbol, name, navList) => setPreviewStock({ symbol, name, source, navList })}
-        onAlertClick={(event, navList) => {
-          if (event.symbol) setPreviewStock({ symbol: event.symbol, name: event.name ?? undefined, alert: event, source: 'alert', navList })
-        }}
-        onDimensionClick={setDimensionTarget}
-      />
+      {/* 自选实时模式提示: 大盘看板为盘后数据, 仅自选股实时。避免用户误读为全市场实时。 */}
+      {quoteMode === 'watchlist' && (
+        <div className="mb-1.5 flex items-start gap-2 rounded-card border border-amber-500/30 bg-amber-500/8 px-3 py-1.5 text-[11px] leading-relaxed">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <div className="min-w-0 flex-1 text-secondary">
+            当前为「自选实时」模式,看板展示的大盘数据为<strong className="text-foreground">盘后快照</strong>(最新有数据日),并非盘中实时;
+            仅自选股({data.quote_status?.watchlist_symbol_count ?? 0} 只)支持实时监控。
+            <span className="ml-1 text-accent">全市场实时依赖数据源支持</span>
+          </div>
+        </div>
+      )}
+
+      <DashboardGrid ctx={widgetCtx} items={dashItems} onItemsChange={setDashItems} editing={dashEditing} />
 
       <StockPreviewDialog
         symbol={previewStock?.symbol ?? null}
@@ -277,15 +340,6 @@ export function Dashboard() {
       />
     </div>
   )
-}
-
-// 页头行情延迟展示 (实时页专属, 回溯页不显示)
-function quoteAge(ms?: number | null) {
-  if (ms == null) return '—'
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  const s = Math.round(ms / 1000)
-  if (s < 60) return `${s}s`
-  return `${Math.floor(s / 60)}m${s % 60}s`
 }
 
 // ===== 无数据常驻引导卡片: 一键触发盘后管道获取行情数据(无 Key 也可) =====
