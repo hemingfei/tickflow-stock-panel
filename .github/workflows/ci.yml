@@ -6,7 +6,7 @@ name: CI
 # 开放面的任何变化都会在这里被拦下, 须有意识地更新快照。
 on:
   push:
-    branches: [main]
+    branches: [main, hmf]
   pull_request:
     branches: [main]
 
