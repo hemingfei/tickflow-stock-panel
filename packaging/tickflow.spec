@@ -32,9 +32,10 @@ ROOT = Path(SPECPATH).parent
 FRONTEND_DIST = str(ROOT / "frontend" / "dist")
 TIERS_YAML = str(ROOT / "tiers.yaml")
 BUILTIN_STRATEGIES = str(ROOT / "backend" / "app" / "strategy" / "builtin")
-# 图标按平台选: Windows 直接用 brand/icon.ico (品牌资产唯一来源, 透明底渐变 logo,
-# 见 brand/README 接入指引); macOS 用 icon.icns (未入库, CI 由 generate_icon.py 现场生成)。
-APP_ICON = str((ROOT / "packaging" / "icon.icns") if _IS_MACOS else (ROOT / "brand" / "icon.ico"))
+# 图标按平台选: Windows 用 brand/icon.ico, macOS 用 brand/icon.icns —
+# 两者均由 brand/png/logo-tile-light-512.png 派生 (浅色圆角卡版, 品牌资产唯一来源,
+# 见 brand/README 接入指引), 无需 CI 现场生成。
+APP_ICON = str((ROOT / "brand" / "icon.icns") if _IS_MACOS else (ROOT / "brand" / "icon.ico"))
 
 # ── 收集带原生库的依赖 (.libs/ 目录必须完整, 否则启动崩) ─────────────
 # polars / pyarrow / duckdb / fastexcel 都自带共享库子目录
