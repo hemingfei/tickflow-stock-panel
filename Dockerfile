@@ -157,9 +157,11 @@ COPY --from=codex-builder /opt/codex-native /usr/local/bin/codex
 RUN codex --version
 
 ENV PYTHONPATH=/app
-# 运行时 uv 镜像源持久化: CMD 用 `uv run` 启动, 锁与 pyproject 不一致等场景下
-# uv 会在容器内重新解析/安装 —— 无源配置时默认 pypi.org, 国内网络会卡死启动
-# (实测阿里云 ECS)。与构建期 RUN 内的 export 同源, 这里让它跨层存活。
+# 运行时 uv 镜像源持久化: CMD 用 `uv run --frozen` 启动 —— 直接以构建期 uv sync
+# 装好的 .venv 启动, 不在启动时重新解析依赖。裸 `uv run` 每次启动都会重解析并
+# 联网拉元数据, 依赖镜像源可用性 (实测 2026-10-10 aliyun 缺 python-dotenv 1.2.2
+# 的 .whl.metadata 返回 404, 容器启动即崩循环); 依赖解析只应发生在构建期, 那里
+# 有主源+备用源+官方源三重兜底。保留源配置仅作 --frozen 兜底路径与调试用。
 ARG PYPI_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PYPI_FALLBACK=https://mirrors.aliyun.com/pypi/simple
 ENV UV_DEFAULT_INDEX=${PYPI_INDEX} \
@@ -168,4 +170,4 @@ ENV UV_DEFAULT_INDEX=${PYPI_INDEX} \
 # 此处让日志时间戳等其余 naive 时间也对齐北京时间。
 ENV TZ=Asia/Shanghai
 EXPOSE 3018
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]
+CMD ["uv", "run", "--frozen", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3018"]
