@@ -919,7 +919,7 @@ export function Watchlist() {
       minuteBatch.data?.data ?? {},
       enriched.data?.rows,
       enriched.data?.dates,
-      new Date(),
+      new Date(Date.now() + 8 * 3_600_000),   // 北京墙钟 (本地钟 +8h, 读 UTC 分量)
     )
   }, [intradayVisible, minuteBatch.data, enriched.data])
 

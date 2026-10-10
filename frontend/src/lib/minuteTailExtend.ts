@@ -24,15 +24,21 @@ export type TailExtendQuoteDates = {
   index?: string | null
 }
 
-/** 连续竞价时段 (9:31-11:30, 13:01-15:00); 收盘后 rt 价即收盘价无需续写 */
+/**
+ * 连续竞价时段 (9:31-11:30, 13:01-15:00); 15:00 是收盘集合竞价定版K, 也要续写。
+ * 收盘后 rt 价即收盘价无需续写。now 必须是「本地钟毫秒 +8h」的 instant ——
+ * 其 UTC 分量即北京墙钟, 跨时区机器上读本地分量会错位 (见 extendMinuteTail)。
+ */
 function inContinuousSession(now: Date): boolean {
-  const hh = now.getHours(), mm = now.getMinutes()
+  const hh = now.getUTCHours(), mm = now.getUTCMinutes()
   return (hh === 9 && mm >= 31) || hh === 10 ||
-    (hh === 11 && mm <= 30) || (hh === 13 && mm >= 1) || hh === 14
+    (hh === 11 && mm <= 30) || (hh === 13 && mm >= 1) || hh === 14 ||
+    (hh === 15 && mm === 0)
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
+/** now 约定传 new Date(Date.now() + 8 * 3_600_000) — UTC 分量即北京墙钟, 见 inContinuousSession */
 export function extendMinuteTail(
   base: Record<string, MinuteKlineRow[]>,
   liveRows: TailExtendLiveRow[] | undefined,
@@ -43,9 +49,11 @@ export function extendMinuteTail(
   // fail-closed: 旧后端无 dates 字段时整个续画停用 (退化为纯轮询节奏, 不会画错)
   if (!quoteDates) return base
 
-  // 与服务端同构的 naive 北京时间戳 (手工拼本地时间, 不能用 toISOString — 那是 UTC)
-  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-  const barTs = `${todayStr}T${pad(now.getHours())}:${pad(now.getMinutes())}:00`
+  // 与服务端同构的 naive 北京时间戳: 分钟K的 datetime 是北京墙钟, 用「本地钟 +8h
+  // 的 instant」读 UTC 分量手工拼接 (不能用 toISOString — 那会再偏 8h; 也不能用
+  // 本地分量 — 跨时区机器会拼出未来K或静默失效)。
+  const todayStr = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())}`
+  const barTs = `${todayStr}T${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:00`
 
   const liveBySymbol = new Map(liveRows.map((r) => [r.symbol, r]))
   const patched: Record<string, MinuteKlineRow[]> = {}

@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { extendMinuteTail, type TailExtendLiveRow } from './minuteTailExtend'
 import type { MinuteKlineRow } from '@/lib/api'
 
-const NOW = new Date(2026, 9, 8, 10, 30) // 2026-10-08 10:30 (连续竞价时段)
+// now 契约: 传「本地钟 +8h」的 instant, 其 UTC 分量即北京墙钟 — 测试用 Date.UTC
+// 构造, 任何时区下运行断言都成立。
+const NOW = new Date(Date.UTC(2026, 9, 8, 10, 30)) // 北京墙钟 2026-10-08 10:30 (连续竞价时段)
 const TODAY = '2026-10-08'
 
 function bars(...datetimes: string[]): MinuteKlineRow[] {
@@ -77,10 +79,18 @@ describe('extendMinuteTail 新鲜度守卫', () => {
   })
 
   it('非连续竞价时段 (午休/收盘后) 不续画', () => {
-    const lunch = new Date(2026, 9, 8, 12, 0)
+    const lunch = new Date(Date.UTC(2026, 9, 8, 12, 0))
     expect(extendMinuteTail(BASE, LIVE, DATES_FRESH_STOCK_STALE_ETF, lunch)).toBe(BASE)
-    const afterClose = new Date(2026, 9, 8, 15, 30)
+    const afterClose = new Date(Date.UTC(2026, 9, 8, 15, 30))
     expect(extendMinuteTail(BASE, LIVE, DATES_FRESH_STOCK_STALE_ETF, afterClose)).toBe(BASE)
+  })
+
+  it('15:00 收盘集合竞价分钟仍续画 (定版K追加)', () => {
+    const closing = new Date(Date.UTC(2026, 9, 8, 15, 0))
+    const base = { '600519.SH': bars(`${TODAY}T14:58:00`, `${TODAY}T14:59:00`) }
+    const out = extendMinuteTail(base, LIVE, DATES_FRESH_STOCK_STALE_ETF, closing)
+    expect(out['600519.SH']).toHaveLength(3)
+    expect(out['600519.SH'][2].datetime).toBe(`${TODAY}T15:00:00`)
   })
 
   it('liveRows 为空时不续画', () => {
