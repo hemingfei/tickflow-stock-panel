@@ -10,7 +10,7 @@
 
 构建 (在项目根目录):
   cd frontend && pnpm build                     # 先构建前端到 frontend/dist
-  pyinstaller packaging/tickflow.spec           # 产物在 dist/TSP/
+  pyinstaller packaging/tsp.spec                # 产物在 dist/TSP/
 """
 import sys
 from importlib.util import find_spec
@@ -62,9 +62,39 @@ for pkg in ("_polars_runtime_32", "_polars_runtime_compat"):
 # Polars 新 ABI 运行时由加载器选择，需显式收集子模块。
 hiddenimports += collect_submodules("polars")
 
+# ── 内置可选插件 (app/plugins/*) ─────────────────────────────────────
+# loader._load_builtin_plugins() 在文件系统扫 <_internal>/app/plugins/*/plugin.yaml,
+# entry 又是 importlib 字符串动态导入 — 两条链路静态分析都看不见, 必须双声明:
+# datas 把清单 yaml 落盘 (frozen 下 plugins_dir() 恰好解析到 _internal/app/plugins),
+# hiddenimports 把 provider/client 塞进 PYZ。
+# 注: stocksdk 出于合规暂不进桌面包 (与 GHCR 镜像口径一致), 需要时仿照添加。
+datas += [
+    (str(ROOT / "backend" / "app" / "plugins" / "fuyao" / "plugin.yaml"), "app/plugins/fuyao"),
+]
+hiddenimports += [
+    "app.plugins.fuyao.provider",
+    "app.plugins.fuyao.client",
+]
+
+# ── 后端源码扩展 (app/custom/*) ──────────────────────────────────────
+# extensions/loader.py 运行时用 importlib.import_module + pkgutil.iter_modules
+# 发现 app/custom/* — 与插件同样对静态分析不可见, 必须双声明 (issue #459:
+# 未声明时冻结包里扩展静默消失, 助手路由未注册 → 请求落到 GET-only SPA 兜底
+# 返回 405):
+#   datas 落盘到 _internal/app/custom — frozen 下 app.__path__ 解析到
+#     _internal/app, 保 pkgutil 枚举与磁盘可见性;
+#   hiddenimports 进 PYZ — 保 importlib.import_module 可导入。
+datas += [(str(ROOT / "backend" / "app" / "custom"), "app/custom")]
+hiddenimports += collect_submodules("app.custom")
+
 # ── pywebview 平台后端 (动态导入, PyInstaller 默认抓不到) ────────────
 hiddenimports += collect_submodules("webview")
 hiddenimports += collect_submodules("webview.platforms")
+# pywebview 运行时依赖链 (webview/__init__ 顶层 import proxy_tools, Windows 端
+# 还要 bottle/clr_loader/pythonnet)。显式声明为金丝雀: 构建环境缺这些包时
+# PyInstaller 直接报错, 而不是静默产出启动即崩的包 (曾因 venv 缺 proxy_tools
+# 发布过启动崩溃版本)。
+hiddenimports += ["proxy_tools", "bottle", "clr_loader", "pythonnet"]
 
 # ── 系统通知后端 (winotify/plyer 按平台动态导入) ─────────────────────
 if sys.platform == "win32":
@@ -113,6 +143,9 @@ for pkg in (
 datas += [(FRONTEND_DIST, "static")]
 # tiers.yaml → 包根 (config.py frozen 模式读 _MEIPASS/tiers.yaml)
 datas += [(TIERS_YAML, ".")]
+# frontend/package.json → 包根 (app/__init__.py frozen 模式读 _MEIPASS/package.json,
+# __version__ 与安装包 AppVersion / 页面显示同源, 版本号只改 package.json 一处)
+datas += [(str(ROOT / "frontend" / "package.json"), ".")]
 # 内置策略 → app/strategy/builtin/ (importlib 动态加载, 不能进 PYZ)
 datas += [(BUILTIN_STRATEGIES, "app/strategy/builtin")]
 
@@ -206,7 +239,7 @@ if _IS_MACOS:
         version=APP_VERSION,   # → CFBundleShortVersionString / CFBundleVersion
         info_plist={
             "CFBundleName": "Tick Stock Panel",
-            "CFBundleDisplayName": "TSP 股票面板",
+            "CFBundleDisplayName": "TSP",
             "CFBundleVersion": APP_VERSION,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "10.13",
